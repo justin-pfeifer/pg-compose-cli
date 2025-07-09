@@ -1,0 +1,93 @@
+from pg_compose_cli.extract import extract_build_queries
+from pg_compose_cli.diff import diff_schemas
+from pg_compose_cli.pgdump import extract_from_postgres
+import json
+import os
+from typing import Optional, List
+
+
+def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
+    """Load schema objects from a file, connection string, directory, or raw SQL string."""
+    if source.startswith("postgres://"):
+        return extract_from_postgres(source, schemas=schemas)
+
+    if os.path.isfile(source):
+        if source.endswith(".sql"):
+            with open(source, "r", encoding="utf-8") as f:
+                return extract_build_queries(f.read())
+        elif source.endswith(".json"):
+            with open(source, "r", encoding="utf-8") as f:
+                return json.load(f)
+    elif os.path.isdir(source):
+        # Handle directory by merging all SQL files
+        from pg_compose_cli.merge import merge_sql
+        import tempfile
+        
+        # Create a temporary directory for the merged file
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Merge all SQL files in the directory
+            merge_sql(source, temp_dir, 'tables', 'views', 'materialized_views', 'functions', 'data_types')
+            
+            # Read the merged file
+            sorted_path = os.path.join(temp_dir, "sorted.sql")
+            if os.path.exists(sorted_path):
+                with open(sorted_path, "r", encoding="utf-8") as f:
+                    return extract_build_queries(f.read())
+            else:
+                # If no SQL files found, return empty list
+                return []
+
+    # Assume raw SQL string
+    return extract_build_queries(source)
+
+
+def compare_sources(
+    source_a: str,
+    source_b: str,
+    *,
+    schemas: Optional[List[str]] = None,
+    verbose: bool = True
+) -> dict:
+    """Compare two schema sources: .sql, .json, raw SQL, or postgres:// URIs."""
+    
+    schema_a = load_source(source_a, schemas=schemas)
+    schema_b = load_source(source_b, schemas=schemas)
+
+    result = diff_schemas(schema_a, schema_b)
+
+    if verbose:
+        print("\nSchema Diff Results\n" + "=" * 40)
+        for obj in result["created"]:
+            print(f"[CREATE] {obj['query_type']} {obj['object_name']}")
+        for obj in result["dropped"]:
+            print(f"[DROP]   {obj['query_type']} {obj['object_name']}")
+        for obj in result["changed"]:
+            print(f"[CHANGE] {obj['query_type']} {obj['object_name']}")
+            if obj.get("ast_diff"):
+                print("         - AST diff:")
+                ast_diff = obj["ast_diff"]
+                
+                # Handle table changes
+                for col in ast_diff.get("add_columns", []):
+                    print(f"            + column: {col}")
+                for col in ast_diff.get("drop_columns", []):
+                    print(f"            - column: {col}")
+                for col in ast_diff.get("change_columns", []):
+                    print(f"            ~ column: {col['column']}")
+                    if col.get("type"):
+                        print(f"              type: {col['type']['from']} → {col['type']['to']}")
+                    if col.get("nullable"):
+                        print(f"              nullable: {col['nullable']['from']} → {col['nullable']['to']}")
+                    if col.get("default"):
+                        print(f"              default: {col['default']['from']} → {col['default']['to']}")
+                
+                # Handle other changes
+                if ast_diff.get("query_changed"):
+                    print("            ~ query changed")
+                if ast_diff.get("function_changed"):
+                    print("            ~ function changed")
+                if ast_diff.get("ast_changed"):
+                    print("            ~ AST structure changed")
+        print("=" * 40)
+
+    return result

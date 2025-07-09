@@ -1,0 +1,10 @@
+[project]
+name = "pg-compose-cli"
+version = "0.1.0"
+description = "Compare PostgreSQL schemas from SQL files or live connections"
+authors = [{ name = "Justin Pfeifer", email = "justin.pfeifer@protonmail.com" }]
+license = {text = "GPL-3.0-only"}
+dependencies = ["pglast", "psycopg[binary]"]
+
+[project.scripts]
+pg-compose = "pg_compose_cli.cli:main"
