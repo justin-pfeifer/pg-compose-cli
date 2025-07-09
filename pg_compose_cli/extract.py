@@ -180,9 +180,28 @@ def extract_build_queries(sql: str) -> list[dict]:
         elif typename == "GrantStmt":
             query_type = "grant"
             objs = getattr(node, "objects", []) or []
-            if objs and hasattr(objs[0], "relname"):
-                object_name = f"grant_on_{objs[0].relname.lower()}"
-                dependencies.append(objs[0].relname.lower())
+            if objs and len(objs) > 0:
+                obj = objs[0]
+                # Handle different object types in GRANT statements
+                if hasattr(obj, "relname") and obj.relname:
+                    # Table, view, sequence GRANTs
+                    object_name = f"grant_on_{obj.relname.lower()}"
+                    dependencies.append(obj.relname.lower())
+                elif hasattr(obj, "objname") and obj.objname:
+                    # Function GRANTs
+                    if len(obj.objname) > 1:
+                        # Qualified function name (schema.function)
+                        func_name = str(obj.objname[-1].sval).lower()
+                        object_name = f"grant_on_{func_name}"
+                        dependencies.append(func_name)
+                    else:
+                        # Unqualified function name
+                        func_name = str(obj.objname[0].sval).lower()
+                        object_name = f"grant_on_{func_name}"
+                        dependencies.append(func_name)
+                else:
+                    # Schema GRANTs or other types
+                    object_name = "grant_statement"
 
         # Extract SQL slice and create normalized hash
         start = raw_stmt.stmt_location
