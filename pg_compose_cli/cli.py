@@ -33,15 +33,27 @@ def main():
         action="store_true",
         help="Include GRANT/REVOKE statements in comparison and migration"
     )
+    parser.add_argument(
+        "--no-grants",
+        action="store_true",
+        help="Exclude GRANT/REVOKE statements from comparison and migration"
+    )
 
     args = parser.parse_args()
+
+    # Handle grants flag logic
+    grants = False  # Default to excluding grants
+    if args.grants:
+        grants = True  # Explicitly include grants
+    elif args.no_grants:
+        grants = False  # Explicitly exclude grants
 
     result = compare_sources(
         args.source_a,
         args.source_b,
         schemas=args.schemas,
         verbose=not args.quiet,
-        grants=args.grants
+        grants=grants
     )
 
     if args.deploy:

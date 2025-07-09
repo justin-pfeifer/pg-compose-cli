@@ -49,7 +49,31 @@ def normalize_sql(sql: str) -> str:
 
 def extract_build_queries(sql: str) -> list[dict]:
     results = []
-    stmts = parse_sql(sql)
+    
+    try:
+        stmts = parse_sql(sql)
+    except Exception as e:
+        # Try to identify which part of the SQL is causing the issue
+        lines = sql.split('\n')
+        error_msg = f"Failed to parse SQL: {str(e)}"
+        
+        # If it's a syntax error, try to find the problematic line
+        if "syntax error" in str(e).lower():
+            # Look for common problematic patterns
+            if "GRANT" in sql:
+                error_msg += "\n\nThis appears to be a GRANT statement parsing issue."
+                error_msg += "\nThe pglast parser may not support all GRANT statement formats."
+                error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
+            
+            # Show the first few lines of the SQL for context
+            error_msg += f"\n\nFirst 10 lines of SQL:\n"
+            for i, line in enumerate(lines[:10], 1):
+                error_msg += f"{i:2d}: {line}\n"
+            
+            if len(lines) > 10:
+                error_msg += f"... and {len(lines) - 10} more lines"
+        
+        raise ValueError(error_msg)
 
     for raw_stmt in stmts:
         node = raw_stmt.stmt
@@ -182,11 +206,19 @@ def extract_build_queries(sql: str) -> list[dict]:
             objs = getattr(node, "objects", []) or []
             if objs and len(objs) > 0:
                 obj = objs[0]
-                # Handle different object types in GRANT statements
-                if hasattr(obj, "relname") and obj.relname:
-                    # Table, view, sequence GRANTs
+                # Handle schema-qualified names
+                if hasattr(obj, "schemaname") and hasattr(obj, "relname") and obj.schemaname and obj.relname:
+                    qualified_name = f"{obj.schemaname.lower()}.{obj.relname.lower()}"
+                    object_name = f"grant_on_{qualified_name}"
+                    dependencies.append(qualified_name)
+                elif hasattr(obj, "relname") and obj.relname:
                     object_name = f"grant_on_{obj.relname.lower()}"
                     dependencies.append(obj.relname.lower())
+                elif hasattr(obj, "names") and obj.names:
+                    # names is a list of String nodes
+                    qualified_name = ".".join(str(n.sval).lower() for n in obj.names)
+                    object_name = f"grant_on_{qualified_name}"
+                    dependencies.append(qualified_name)
                 elif hasattr(obj, "objname") and obj.objname:
                     # Function GRANTs
                     if len(obj.objname) > 1:
