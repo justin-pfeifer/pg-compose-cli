@@ -6,7 +6,7 @@ import os
 from typing import Optional, List
 
 
-def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
+def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool = True) -> list[dict]:
     """Load schema objects from a file, connection string, directory, or raw SQL string."""
     if source.startswith("postgres://"):
         return extract_from_postgres(source, schemas=schemas)
@@ -61,7 +61,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
             if os.path.isfile(working_dir):
                 # It's a single file, read it directly
                 with open(working_dir, "r", encoding="utf-8") as f:
-                    return extract_build_queries(f.read())
+                    objs = extract_build_queries(f.read())
             else:
                 # It's a directory, merge all SQL files
                 from pg_compose_cli.merge import merge_sql
@@ -76,18 +76,24 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
                     sorted_path = os.path.join(temp_dir, "sorted.sql")
                     if os.path.exists(sorted_path):
                         with open(sorted_path, "r", encoding="utf-8") as f:
-                            return extract_build_queries(f.read())
+                            objs = extract_build_queries(f.read())
                     else:
                         # If no SQL files found, return empty list
-                        return []
+                        objs = []
+            if not grants:
+                objs = [o for o in objs if o.get("query_type") != "grant"]
+            return objs
 
     if os.path.isfile(source):
         if source.endswith(".sql"):
             with open(source, "r", encoding="utf-8") as f:
-                return extract_build_queries(f.read())
+                objs = extract_build_queries(f.read())
         elif source.endswith(".json"):
             with open(source, "r", encoding="utf-8") as f:
-                return json.load(f)
+                objs = json.load(f)
+        if not grants:
+            objs = [o for o in objs if o.get("query_type") != "grant"]
+        return objs
     elif os.path.isdir(source):
         # Handle directory by merging all SQL files
         from pg_compose_cli.merge import merge_sql
@@ -102,13 +108,19 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
             sorted_path = os.path.join(temp_dir, "sorted.sql")
             if os.path.exists(sorted_path):
                 with open(sorted_path, "r", encoding="utf-8") as f:
-                    return extract_build_queries(f.read())
+                    objs = extract_build_queries(f.read())
             else:
                 # If no SQL files found, return empty list
-                return []
+                objs = []
+        if not grants:
+            objs = [o for o in objs if o.get("query_type") != "grant"]
+        return objs
 
     # Assume raw SQL string
-    return extract_build_queries(source)
+    objs = extract_build_queries(source)
+    if not grants:
+        objs = [o for o in objs if o.get("query_type") != "grant"]
+    return objs
 
 
 def compare_sources(
@@ -116,12 +128,13 @@ def compare_sources(
     source_b: str,
     *,
     schemas: Optional[List[str]] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    grants: bool = True
 ) -> dict:
     """Compare two schema sources: .sql, .json, raw SQL, or postgres:// URIs."""
     
-    schema_a = load_source(source_a, schemas=schemas)
-    schema_b = load_source(source_b, schemas=schemas)
+    schema_a = load_source(source_a, schemas=schemas, grants=grants)
+    schema_b = load_source(source_b, schemas=schemas, grants=grants)
 
     result = diff_schemas(schema_a, schema_b)
 

@@ -16,6 +16,9 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.append(f"DROP FUNCTION {obj['object_name']};")
         elif obj["query_type"] == "index":
             commands.append(f"DROP INDEX {obj['object_name']};")
+        elif obj["query_type"] == "grant":
+            # For dropped grants, we need to revoke them
+            commands.extend(_generate_revoke_commands(obj))
     
     # Handle created objects
     for obj in diff_result.get("created", []):
@@ -35,6 +38,9 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.append(f"CREATE FUNCTION {obj['object_name']} {_extract_function_definition(obj)};")
         elif obj["query_type"] == "index":
             commands.append(f"CREATE INDEX {obj['object_name']} {_extract_index_definition(obj)};")
+        elif obj["query_type"] == "grant":
+            # For created grants, just use the original GRANT statement
+            commands.append(_ensure_semicolon(obj["query_text"]))
     
     # Handle changed objects
     for obj in diff_result.get("changed", []):
@@ -44,6 +50,8 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.extend(_generate_view_alter_commands(obj))
         elif obj["query_type"] == "function":
             commands.extend(_generate_function_alter_commands(obj))
+        elif obj["query_type"] == "grant":
+            commands.extend(_generate_grant_alter_commands(obj))
     
     return commands
 
@@ -197,18 +205,53 @@ def _generate_grant_alter_commands(obj: Dict) -> List[str]:
     # For grants, we need to handle the change by revoking old and granting new
     ast_diff = obj.get("ast_diff", {})
     
-    # Get the old and new grant statements
-    old_grant = obj.get("from_hash", "")  # This would need to be enhanced to get actual old grant
-    new_grant = obj.get("query_text", "")
+    # For now, we'll generate a simple approach: revoke all and grant new
+    # In a more sophisticated implementation, you'd want to generate specific REVOKE statements
+    # based on the ast_diff information
     
-    if old_grant and new_grant:
-        # Convert old GRANT to REVOKE
-        revoke_sql = old_grant.replace("GRANT ", "REVOKE ").replace(" TO ", " FROM ")
+    # Get the object name from the grant
+    object_name = obj.get("object_name", "")
+    if object_name.startswith("grant_on_"):
+        object_name = object_name[9:]  # Remove "grant_on_" prefix
+    
+    # Get privilege and grantee changes
+    privilege_change = ast_diff.get("privileges")
+    grantee_change = ast_diff.get("grantees")
+    
+    if privilege_change or grantee_change:
+        # Generate REVOKE for old privileges/grantees
+        if privilege_change:
+            old_privileges = privilege_change.get("from", [])
+            old_grantees = grantee_change.get("from", []) if grantee_change else []
+            
+            if old_privileges and old_grantees:
+                privileges_str = ", ".join(old_privileges).upper()
+                grantees_str = ", ".join(old_grantees)
+                commands.append(f"REVOKE {privileges_str} ON {object_name} FROM {grantees_str};")
+        
+        # Generate GRANT for new privileges/grantees
+        if privilege_change:
+            new_privileges = privilege_change.get("to", [])
+            new_grantees = grantee_change.get("to", []) if grantee_change else []
+            
+            if new_privileges and new_grantees:
+                privileges_str = ", ".join(new_privileges).upper()
+                grantees_str = ", ".join(new_grantees)
+                commands.append(f"GRANT {privileges_str} ON {object_name} TO {grantees_str};")
+    
+    return commands
+
+def _generate_revoke_commands(obj: Dict) -> List[str]:
+    """Generate REVOKE commands for dropped grants."""
+    commands = []
+    
+    # For dropped grants, we need to revoke them
+    grant_sql = obj.get("query_text", "")
+    
+    if grant_sql:
+        # Convert GRANT to REVOKE
+        revoke_sql = grant_sql.replace("GRANT ", "REVOKE ").replace(" TO ", " FROM ")
         commands.append(_ensure_semicolon(revoke_sql))
-    
-    # Add the new grant
-    if new_grant:
-        commands.append(_ensure_semicolon(new_grant))
     
     return commands
 

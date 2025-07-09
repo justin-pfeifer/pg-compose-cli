@@ -28,6 +28,11 @@ def main():
         action="store_true",
         help="Show what would be deployed without actually applying changes"
     )
+    parser.add_argument(
+        "--grants",
+        action="store_true",
+        help="Include GRANT/REVOKE statements in comparison and migration"
+    )
 
     args = parser.parse_args()
 
@@ -35,7 +40,8 @@ def main():
         args.source_a,
         args.source_b,
         schemas=args.schemas,
-        verbose=not args.quiet
+        verbose=not args.quiet,
+        grants=args.grants
     )
 
     if args.deploy:

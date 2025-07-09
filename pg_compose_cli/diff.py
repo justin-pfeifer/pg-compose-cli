@@ -12,6 +12,8 @@ def ast_diff(a: dict, b: dict) -> dict:
         return ast_diff_view(a, b)
     elif a["query_type"] == "function":
         return ast_diff_function(a, b)
+    elif a["query_type"] == "grant":
+        return ast_diff_grant(a, b)
     else:
         # For other types, compare the full AST
         return ast_diff_generic(a, b)
@@ -153,6 +155,40 @@ def ast_diff_function(a: dict, b: dict) -> dict:
         return {"function_changed": True}
     except Exception as e:
         return {"error": f"Failed to parse function AST: {str(e)}"}
+
+def ast_diff_grant(a: dict, b: dict) -> dict:
+    """Compare grant statements using AST."""
+    try:
+        a_stmt = parse_sql(a["query_text"])[0].stmt
+        b_stmt = parse_sql(b["query_text"])[0].stmt
+        
+        # Compare privileges
+        a_privileges = [priv.priv_name for priv in getattr(a_stmt, "privileges", [])]
+        b_privileges = [priv.priv_name for priv in getattr(b_stmt, "privileges", [])]
+        
+        # Compare grantees
+        a_grantees = [grant.rolename for grant in getattr(a_stmt, "grantees", [])]
+        b_grantees = [grant.rolename for grant in getattr(b_stmt, "grantees", [])]
+        
+        # Compare objects
+        a_objects = getattr(a_stmt, "objects", [])
+        b_objects = getattr(b_stmt, "objects", [])
+        
+        changes = {}
+        
+        if a_privileges != b_privileges:
+            changes["privileges"] = {"from": a_privileges, "to": b_privileges}
+        
+        if a_grantees != b_grantees:
+            changes["grantees"] = {"from": a_grantees, "to": b_grantees}
+        
+        if len(changes) > 0:
+            return changes
+        else:
+            return {"no_changes": True}
+            
+    except Exception as e:
+        return {"error": f"Failed to parse grant AST: {str(e)}"}
 
 def _extract_primary_key_from_table(table_stmt):
     """Extract primary key information from a table statement."""
