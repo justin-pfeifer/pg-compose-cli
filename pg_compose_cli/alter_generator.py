@@ -76,7 +76,7 @@ def _generate_table_alter_commands(obj: Dict) -> List[str]:
         
         if change.get("default") is not None:
             old_default = change["default"].get("from")
-            new_default = change["default"]["to"]
+            new_default = change["default"].get("to")
             
             # Handle default changes properly
             if new_default is None:

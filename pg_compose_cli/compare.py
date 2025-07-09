@@ -81,7 +81,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
         # Create a temporary directory for the merged file
         with tempfile.TemporaryDirectory() as temp_dir:
             # Merge all SQL files in the directory
-            merge_sql(source, temp_dir, 'extensions', 'data_types', 'domains', 'tables', 'sequences', 'views', 'materialized_views', 'functions')
+            merge_sql(source, temp_dir, 'extensions', 'types', 'domains', 'tables', 'sequences', 'views', 'materialized_views', 'functions')
             
             # Read the merged file
             sorted_path = os.path.join(temp_dir, "sorted.sql")
