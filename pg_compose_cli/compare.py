@@ -12,7 +12,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
         return extract_from_postgres(source, schemas=schemas)
 
     # Handle git URLs
-    if source.startswith("git://") or source.startswith("git@"):
+    if source.startswith("git://") or source.startswith("git@") or source.startswith("https://github.com/"):
         from pg_compose_cli.git import extract_from_git_repo
         
         # Parse target path and branch from URL if present
@@ -37,34 +37,49 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
                     source = f"{base_url}#{tree_part}"
                     target_path = None
             else:
-                # Handle case where .git is not in URL
-                parts = source.split("/", 3)  # Split into max 4 parts
-                if len(parts) >= 4:
-                    source = "/".join(parts[:3])  # First 3 parts are the repo URL
-                    target_path = "/".join(parts[3:])  # Rest is the target directory
+                # Handle case where .git is in the URL but not at the end
+                if ".git" in source:
+                    # Find the .git part and split there
+                    git_index = source.find(".git")
+                    if git_index != -1:
+                        base_url = source[:git_index + 4]  # Include .git
+                        target_path = source[git_index + 5:]  # Skip the / after .git
+                        source = base_url
+                else:
+                    # Handle case where .git is not in URL at all
+                    parts = source.split("/", 3)  # Split into max 4 parts
+                    if len(parts) >= 4:
+                        source = "/".join(parts[:3])  # First 3 parts are the repo URL
+                        target_path = "/".join(parts[3:])  # Rest is the target directory
         # If we parsed a branch, append it to the repo URL
         if branch:
             source = f"{source}#{branch}"
         # Get the working directory from git module using context manager
         git_context = extract_from_git_repo(source, target_path)
         with git_context as working_dir:
-            # Handle the working directory by merging all SQL files
-            from pg_compose_cli.merge import merge_sql
-            import tempfile
-            
-            # Create a temporary directory for the merged file
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Merge all SQL files in the working directory
-                merge_sql(working_dir, temp_dir, 'extensions', 'data_types', 'domains', 'tables', 'sequences', 'views', 'materialized_views', 'functions')
+            # Check if working_dir is a file or directory
+            if os.path.isfile(working_dir):
+                # It's a single file, read it directly
+                with open(working_dir, "r", encoding="utf-8") as f:
+                    return extract_build_queries(f.read())
+            else:
+                # It's a directory, merge all SQL files
+                from pg_compose_cli.merge import merge_sql
+                import tempfile
                 
-                # Read the merged file
-                sorted_path = os.path.join(temp_dir, "sorted.sql")
-                if os.path.exists(sorted_path):
-                    with open(sorted_path, "r", encoding="utf-8") as f:
-                        return extract_build_queries(f.read())
-                else:
-                    # If no SQL files found, return empty list
-                    return []
+                # Create a temporary directory for the merged file
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    # Merge all SQL files in the working directory
+                    merge_sql(working_dir, temp_dir, 'extensions', 'data_types', 'domains', 'tables', 'sequences', 'views', 'materialized_views', 'functions')
+                    
+                    # Read the merged file
+                    sorted_path = os.path.join(temp_dir, "sorted.sql")
+                    if os.path.exists(sorted_path):
+                        with open(sorted_path, "r", encoding="utf-8") as f:
+                            return extract_build_queries(f.read())
+                    else:
+                        # If no SQL files found, return empty list
+                        return []
 
     if os.path.isfile(source):
         if source.endswith(".sql"):

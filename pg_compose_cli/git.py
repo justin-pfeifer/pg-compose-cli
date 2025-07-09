@@ -23,9 +23,7 @@ class GitRepoContext:
         if "#" in repo_url:
             repo_url, ref = repo_url.split("#", 1)
         
-        # Convert git:// URLs to https:// for cloning
-        if repo_url.startswith("git://"):
-            repo_url = repo_url.replace("git://", "https://", 1)
+        # Use the original protocol - don't convert git:// to https://
         
         # Try different temp directory locations to avoid permission issues
         for temp_location in [None, os.path.expanduser("~/temp"), os.path.expanduser("~/Desktop/temp")]:
@@ -64,7 +62,10 @@ class GitRepoContext:
                 clone_cmd[clone_cmd.index("-b") + 1] = "master"
                 subprocess.run(clone_cmd, check=True, capture_output=True, text=True)
             else:
-                raise ValueError(f"Failed to clone repository: {e.stderr}")
+                error_msg = e.stderr
+                if "unable to connect" in error_msg and repo_url.startswith("git://"):
+                    error_msg += "\n\nNote: The git:// protocol may be blocked by your network or GitHub. Try using https:// or ssh:// instead."
+                raise ValueError(f"Failed to clone repository: {error_msg}")
         except FileNotFoundError:
             raise ValueError("Git is not installed or not in PATH")
         
