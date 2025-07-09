@@ -204,8 +204,16 @@ def extract_build_queries(sql: str) -> list[dict]:
         elif typename == "GrantStmt":
             query_type = "grant"
             objs = getattr(node, "objects", []) or []
-            if objs and len(objs) > 0:
-                obj = objs[0]
+            # Extract SQL slice and create normalized hash (for the whole statement)
+            start = raw_stmt.stmt_location
+            end = start + raw_stmt.stmt_len
+            query_text = sql[start:end]
+            normalized_sql = normalize_sql(query_text)
+            query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
+
+            for obj in objs:
+                dependencies = []
+                object_name = None
                 # Handle schema-qualified names
                 if hasattr(obj, "schemaname") and hasattr(obj, "relname") and obj.schemaname and obj.relname:
                     qualified_name = f"{obj.schemaname.lower()}.{obj.relname.lower()}"
@@ -234,28 +242,44 @@ def extract_build_queries(sql: str) -> list[dict]:
                 else:
                     # Schema GRANTs or other types
                     object_name = "grant_statement"
+                # Clean up dependency list
+                filtered_deps = [
+                    d for d in dependencies
+                    if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
+                ]
+                results.append({
+                    "query_type": query_type,
+                    "object_name": object_name,
+                    "query_start_pos": start,
+                    "query_end_pos": end,
+                    "query_hash": query_hash,
+                    "query_text": query_text,
+                    "dependencies": sorted(set(filtered_deps))
+                })
 
-        # Extract SQL slice and create normalized hash
-        start = raw_stmt.stmt_location
-        end = start + raw_stmt.stmt_len
-        query_text = sql[start:end]
-        normalized_sql = normalize_sql(query_text)
-        query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
+        else:
+            # Handle all other statement types
+            # Extract SQL slice and create normalized hash (only for non-GRANT statements)
+            start = raw_stmt.stmt_location
+            end = start + raw_stmt.stmt_len
+            query_text = sql[start:end]
+            normalized_sql = normalize_sql(query_text)
+            query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
 
-        # Clean up dependency list
-        filtered_deps = [
-            d for d in dependencies
-            if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
-        ]
+            # Clean up dependency list
+            filtered_deps = [
+                d for d in dependencies
+                if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
+            ]
 
-        results.append({
-            "query_type": query_type,
-            "object_name": object_name,
-            "query_start_pos": start,
-            "query_end_pos": end,
-            "query_hash": query_hash,
-            "query_text": query_text,
-            "dependencies": sorted(set(filtered_deps))
-        })
+            results.append({
+                "query_type": query_type,
+                "object_name": object_name,
+                "query_start_pos": start,
+                "query_end_pos": end,
+                "query_hash": query_hash,
+                "query_text": query_text,
+                "dependencies": sorted(set(filtered_deps))
+            })
 
     return results

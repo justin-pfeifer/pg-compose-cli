@@ -1,59 +1,199 @@
 from typing import List, Dict
+from .sorter import sort_alter_commands
 
 def generate_alter_commands(diff_result: Dict) -> List[str]:
     """Generate ALTER commands from a schema diff result."""
     commands = []
+    command_objects = []  # Store command objects with dependency info for sorting
     
     # Handle dropped objects
     for obj in diff_result.get("dropped", []):
         if obj["query_type"] == "base_table":
-            commands.append(f"DROP TABLE {obj['object_name']};")
+            command = f"DROP TABLE {obj['object_name']};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "view":
-            commands.append(f"DROP VIEW {obj['object_name']};")
+            command = f"DROP VIEW {obj['object_name']};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "materialized_view":
-            commands.append(f"DROP MATERIALIZED VIEW {obj['object_name']};")
+            command = f"DROP MATERIALIZED VIEW {obj['object_name']};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "function":
-            commands.append(f"DROP FUNCTION {obj['object_name']};")
+            command = f"DROP FUNCTION {obj['object_name']};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "index":
-            commands.append(f"DROP INDEX {obj['object_name']};")
+            command = f"DROP INDEX {obj['object_name']};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "grant":
             # For dropped grants, we need to revoke them
-            commands.extend(_generate_revoke_commands(obj))
+            revoke_commands = _generate_revoke_commands(obj)
+            commands.extend(revoke_commands)
+            for cmd in revoke_commands:
+                command_objects.append({
+                    "command": cmd,
+                    "object_name": obj['object_name'],
+                    "query_type": obj['query_type'],
+                    "dependencies": obj.get('dependencies', [])
+                })
     
     # Handle created objects
     for obj in diff_result.get("created", []):
         if obj["query_type"] == "base_table":
             table_def = obj.get("table_definition", _extract_table_definition(obj))
-            commands.append(f"CREATE TABLE {obj['object_name']} (\n{table_def}\n);")
+            command = f"CREATE TABLE {obj['object_name']} (\n{table_def}\n);"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "view":
             # For views, use CREATE OR REPLACE VIEW
             original_sql = obj.get("view_definition", obj["query_text"])
             or_replace_sql = _replace_create_view_with_or_replace(original_sql)
-            commands.append(_ensure_semicolon(or_replace_sql))
+            command = _ensure_semicolon(or_replace_sql)
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "materialized_view":
             # For materialized views, just use the original CREATE MATERIALIZED VIEW statement
             original_sql = obj.get("view_definition", obj["query_text"])
-            commands.append(_ensure_semicolon(original_sql))
+            command = _ensure_semicolon(original_sql)
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "function":
-            commands.append(f"CREATE FUNCTION {obj['object_name']} {_extract_function_definition(obj)};")
+            command = f"CREATE FUNCTION {obj['object_name']} {_extract_function_definition(obj)};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "index":
-            commands.append(f"CREATE INDEX {obj['object_name']} {_extract_index_definition(obj)};")
+            command = f"CREATE INDEX {obj['object_name']} {_extract_index_definition(obj)};"
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
         elif obj["query_type"] == "grant":
             # For created grants, just use the original GRANT statement
-            commands.append(_ensure_semicolon(obj["query_text"]))
+            command = _ensure_semicolon(obj["query_text"])
+            commands.append(command)
+            command_objects.append({
+                "command": command,
+                "object_name": obj['object_name'],
+                "query_type": obj['query_type'],
+                "dependencies": obj.get('dependencies', [])
+            })
     
     # Handle changed objects
     for obj in diff_result.get("changed", []):
         if obj["query_type"] == "base_table":
-            commands.extend(_generate_table_alter_commands(obj))
+            alter_commands = _generate_table_alter_commands(obj)
+            commands.extend(alter_commands)
+            for cmd in alter_commands:
+                # Try to extract the table name from the command for dependency sorting
+                table_name = obj['object_name']
+                if cmd.strip().upper().startswith("ALTER TABLE"):
+                    # Use the table name as object_name for sorting
+                    command_objects.append({
+                        "command": cmd,
+                        "object_name": table_name,
+                        "query_type": obj['query_type'],
+                        "dependencies": obj.get('dependencies', [])
+                    })
+                else:
+                    # For other alter commands, just include them without object_name
+                    command_objects.append({
+                        "command": cmd,
+                        "object_name": None,
+                        "query_type": obj['query_type'],
+                        "dependencies": obj.get('dependencies', [])
+                    })
         elif obj["query_type"] in ["view", "materialized_view"]:
-            commands.extend(_generate_view_alter_commands(obj))
+            alter_commands = _generate_view_alter_commands(obj)
+            commands.extend(alter_commands)
+            for cmd in alter_commands:
+                # Use the view/materialized_view name as object_name for sorting
+                command_objects.append({
+                    "command": cmd,
+                    "object_name": obj['object_name'],
+                    "query_type": obj['query_type'],
+                    "dependencies": obj.get('dependencies', [])
+                })
         elif obj["query_type"] == "function":
-            commands.extend(_generate_function_alter_commands(obj))
+            alter_commands = _generate_function_alter_commands(obj)
+            commands.extend(alter_commands)
+            for cmd in alter_commands:
+                command_objects.append({
+                    "command": cmd,
+                    "object_name": obj['object_name'],
+                    "query_type": obj['query_type'],
+                    "dependencies": obj.get('dependencies', [])
+                })
         elif obj["query_type"] == "grant":
-            commands.extend(_generate_grant_alter_commands(obj))
+            alter_commands = _generate_grant_alter_commands(obj)
+            commands.extend(alter_commands)
+            for cmd in alter_commands:
+                command_objects.append({
+                    "command": cmd,
+                    "object_name": obj['object_name'],
+                    "query_type": obj['query_type'],
+                    "dependencies": obj.get('dependencies', [])
+                })
     
-    return commands
+    # Sort commands by dependencies
+    try:
+        sorted_objects = sort_alter_commands(command_objects)
+        sorted_commands = [obj["command"] for obj in sorted_objects]
+        return sorted_commands
+    except ValueError as e:
+        # If there's a cyclic dependency, return unsorted commands with a warning
+        print(f"Warning: Cyclic dependency detected in alter commands: {e}")
+        return commands
 
 def _generate_table_alter_commands(obj: Dict) -> List[str]:
     """Generate ALTER TABLE commands for table changes."""
