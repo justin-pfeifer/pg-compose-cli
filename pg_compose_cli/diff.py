@@ -90,10 +90,22 @@ def ast_diff_table(a: dict, b: dict) -> dict:
                     "default": {"from": a_default, "to": b_default} if a_default != b_default else None
                 })
         
+        # Compare primary keys
+        a_pk = _extract_primary_key_from_table(a_stmt)
+        b_pk = _extract_primary_key_from_table(b_stmt)
+        primary_key_change = None
+        
+        if a_pk != b_pk:
+            primary_key_change = {
+                "from": a_pk,
+                "to": b_pk
+            }
+        
         return {
             "add_columns": added,
             "drop_columns": removed,
-            "change_columns": changed
+            "change_columns": changed,
+            "primary_key": primary_key_change
         }
     except Exception as e:
         return {"error": f"Failed to parse table AST: {str(e)}"}
@@ -142,12 +154,29 @@ def ast_diff_function(a: dict, b: dict) -> dict:
     except Exception as e:
         return {"error": f"Failed to parse function AST: {str(e)}"}
 
+def _extract_primary_key_from_table(table_stmt):
+    """Extract primary key information from a table statement."""
+    if hasattr(table_stmt, 'tableElts'):
+        # Table-level constraints (composite PKs)
+        for elem in table_stmt.tableElts:
+            if hasattr(elem, 'contype') and elem.contype == 6:  # CONSTR_PRIMARY
+                if hasattr(elem, 'keys'):
+                    return [key.sval for key in elem.keys]
+        # Column-level PKs
+        for col in table_stmt.tableElts:
+            if hasattr(col, 'colname') and getattr(col, 'constraints', None):
+                for constraint in col.constraints or []:
+                    if hasattr(constraint, 'contype') and constraint.contype == 6:  # CONSTR_PRIMARY
+                        return col.colname
+    return None
+
 def extract_table_definition(obj: dict) -> str:
-    """Extract table definition from CREATE TABLE statement."""
+    """Extract table definition from CREATE TABLE statement, including PRIMARY KEY constraints."""
     try:
         stmt = parse_sql(obj["query_text"])[0].stmt
         if hasattr(stmt, "tableElts"):
             column_defs = []
+            table_constraints = []
             for col in stmt.tableElts:
                 if hasattr(col, "colname"):
                     # Extract type
@@ -161,7 +190,6 @@ def extract_table_definition(obj: dict) -> str:
                             type_str = ".".join(names).upper()
                     else:
                         type_str = "TEXT"
-                    
                     # Handle typmods (e.g., VARCHAR(15))
                     if hasattr(col, "typeName") and hasattr(col.typeName, "typmods") and col.typeName.typmods:
                         mods = []
@@ -175,18 +203,28 @@ def extract_table_definition(obj: dict) -> str:
                             else:
                                 mods.append(str(mod))
                         type_str += f"({', '.join(mods)})"
-                    
                     col_def = f"{col.colname} {type_str}"
+                    # Check for column-level constraints
+                    if hasattr(col, 'constraints') and col.constraints:
+                        for constraint in col.constraints:
+                            if hasattr(constraint, 'contype') and constraint.contype == 6:  # CONSTR_PRIMARY
+                                col_def += " PRIMARY KEY"
+                            if hasattr(constraint, 'contype') and constraint.contype == 2:  # CONSTR_NOTNULL
+                                col_def += " NOT NULL"
+                            if hasattr(constraint, 'contype') and constraint.contype == 4:  # CONSTR_DEFAULT
+                                if hasattr(constraint, 'raw_expr'):
+                                    col_def += f" DEFAULT {constraint.raw_expr}"
                     if hasattr(col, "is_not_null") and col.is_not_null:
                         col_def += " NOT NULL"
                     if hasattr(col, "raw_default") and col.raw_default:
                         default_val = col.raw_default.val
                         col_def += f" DEFAULT {default_val}"
-                    
                     column_defs.append(f"  {col_def}")
-            
-            return ",\n".join(column_defs)
-        
+                elif hasattr(col, 'contype') and col.contype == 6:  # Table-level PRIMARY KEY
+                    if hasattr(col, 'keys'):
+                        pk_cols = ', '.join(key.sval for key in col.keys)
+                        table_constraints.append(f"  PRIMARY KEY ({pk_cols})")
+            return ",\n".join(column_defs + table_constraints)
         return "/* No columns found */"
     except Exception as e:
         return f"/* Error extracting table definition: {str(e)} */"

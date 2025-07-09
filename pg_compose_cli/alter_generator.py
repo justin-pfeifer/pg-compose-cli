@@ -75,11 +75,39 @@ def _generate_table_alter_commands(obj: Dict) -> List[str]:
             commands.append(f"ALTER TABLE {obj['object_name']} ALTER COLUMN {column_name} {constraint};")
         
         if change.get("default") is not None:
+            old_default = change["default"].get("from")
             new_default = change["default"]["to"]
+            
+            # Handle default changes properly
             if new_default is None:
+                # Drop the default
                 commands.append(f"ALTER TABLE {obj['object_name']} ALTER COLUMN {column_name} DROP DEFAULT;")
-            else:
+            elif old_default is None:
+                # Set a new default where there was none
                 commands.append(f"ALTER TABLE {obj['object_name']} ALTER COLUMN {column_name} SET DEFAULT {new_default};")
+            else:
+                # Change existing default
+                commands.append(f"ALTER TABLE {obj['object_name']} ALTER COLUMN {column_name} SET DEFAULT {new_default};")
+    
+    # Handle primary key changes
+    if ast_diff.get("primary_key"):
+        pk_change = ast_diff["primary_key"]
+        old_pk = pk_change.get("from")
+        new_pk = pk_change.get("to")
+        
+        if old_pk:
+            # Drop existing primary key
+            commands.append(f"ALTER TABLE {obj['object_name']} DROP CONSTRAINT {old_pk};")
+        
+        if new_pk:
+            # Add new primary key
+            if isinstance(new_pk, list):
+                # Multiple columns
+                pk_columns = ", ".join(new_pk)
+                commands.append(f"ALTER TABLE {obj['object_name']} ADD PRIMARY KEY ({pk_columns});")
+            else:
+                # Single column
+                commands.append(f"ALTER TABLE {obj['object_name']} ADD PRIMARY KEY ({new_pk});")
     
     return commands
 
@@ -94,6 +122,45 @@ def _extract_column_definition(obj: Dict, column_name: str) -> str:
         return f"{column_name} TEXT"  # Placeholder - should be enhanced
     
     raise ValueError(f"Column definition extraction not implemented for {column_name}")
+
+def _extract_column_default_from_constraints(column_def) -> str:
+    """Extract default value from ColumnDef constraints."""
+    if hasattr(column_def, 'constraints'):
+        for constraint in column_def.constraints:
+            if hasattr(constraint, 'contype') and constraint.contype == 'CONSTR_DEFAULT':
+                if hasattr(constraint, 'raw_expr'):
+                    return str(constraint.raw_expr)
+    return None
+
+def _extract_column_defaults_from_table(table_obj) -> Dict[str, str]:
+    """Extract all column defaults from a table object."""
+    defaults = {}
+    
+    if hasattr(table_obj, 'tableElts'):
+        for col in table_obj.tableElts:
+            if hasattr(col, 'colname'):
+                col_name = col.colname
+                col_default = _extract_column_default_from_constraints(col)
+                if col_default:
+                    defaults[col_name] = col_default
+    
+    return defaults
+
+def _extract_primary_key_from_table(table_obj):
+    """Extract primary key information from a table object."""
+    if hasattr(table_obj, 'tableElts'):
+        # Table-level constraints (composite PKs)
+        for elem in table_obj.tableElts:
+            if hasattr(elem, 'contype') and elem.contype == 6:  # CONSTR_PRIMARY
+                if hasattr(elem, 'keys'):
+                    return [key.sval for key in elem.keys]
+        # Column-level PKs
+        for col in table_obj.tableElts:
+            if hasattr(col, 'colname') and getattr(col, 'constraints', None):
+                for constraint in col.constraints or []:
+                    if hasattr(constraint, 'contype') and constraint.contype == 6:  # CONSTR_PRIMARY
+                        return col.colname
+    return None
 
 def _generate_view_alter_commands(obj: Dict) -> List[str]:
     """Generate ALTER commands for view changes."""
