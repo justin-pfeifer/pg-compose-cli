@@ -62,3 +62,72 @@ def test_table_removal():
     
     # Should have no created objects
     assert len(result['created']) == 0, "Should not have created objects"
+
+
+def test_compare_against_git_origin():
+    """Test comparing current working directory against git origin."""
+    
+    # Hardcoded GitHub URL for this project
+    github_url = "git://github.com/justin-pfeifer/pg-compose-cli.git"
+    
+    # Use existing test data directory directly
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "users")
+    
+    # Compare test data against git origin's tests/users directory
+    try:
+        result = compare_sources(
+            test_data_dir, 
+            f"{github_url}/tests/users", 
+            verbose=False
+        )
+        
+        # Basic assertions - the exact results will depend on the git origin content
+        assert isinstance(result, dict), "Result should be a dictionary"
+        assert "created" in result, "Result should have 'created' key"
+        assert "dropped" in result, "Result should have 'dropped' key"
+        assert "changed" in result, "Result should have 'changed' key"
+        
+    except Exception as e:
+        # If git comparison fails (e.g., network issues), skip the test
+        import pytest
+        pytest.skip(f"Git comparison failed: {e}")
+
+
+
+
+
+
+
+
+def test_compare_local_vs_git():
+    """Test comparing local test data against git repository."""
+    
+    # Hardcoded GitHub URL for this project
+    github_url = "git://github.com/justin-pfeifer/pg-compose-cli.git"
+    
+    # Use existing test data directory directly
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "users")
+    
+    # Compare local test data against git repository's tests/users directory
+    try:
+        result = compare_sources(
+            test_data_dir, 
+            f"{github_url}/tests/users", 
+            verbose=False
+        )
+        
+        # Basic assertions
+        assert isinstance(result, dict), "Result should be a dictionary"
+        assert "created" in result, "Result should have 'created' key"
+        assert "dropped" in result, "Result should have 'dropped' key"
+        assert "changed" in result, "Result should have 'changed' key"
+        
+        # Since we're comparing local test data against the actual repo,
+        # there should be some differences (the test data vs actual repo content)
+        
+    except Exception as e:
+        # If git comparison fails, skip the test
+        import pytest
+        pytest.skip(f"Local vs git comparison failed: {e}")

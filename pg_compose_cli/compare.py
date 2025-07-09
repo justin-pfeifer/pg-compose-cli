@@ -11,6 +11,61 @@ def load_source(source: str, schemas: Optional[List[str]] = None) -> list[dict]:
     if source.startswith("postgres://"):
         return extract_from_postgres(source, schemas=schemas)
 
+    # Handle git URLs
+    if source.startswith("git://") or source.startswith("git@"):
+        from pg_compose_cli.git import extract_from_git_repo
+        
+        # Parse target path and branch from URL if present
+        target_path = None
+        branch = None
+        # If #branch is present, split it off
+        if "#" in source:
+            source, branch = source.rsplit("#", 1)
+        if "/" in source and not source.endswith(".git"):
+            # Handle URLs with .git/ in them
+            if ".git/" in source:
+                base_url, target_path = source.split(".git/", 1)
+                source = base_url + ".git"
+            # Handle URLs with /tree/branch/path format
+            elif "/tree/" in source:
+                base_url, tree_part = source.split("/tree/", 1)
+                if "/" in tree_part:
+                    branch, target_path = tree_part.split("/", 1)
+                    source = f"{base_url}#{branch}"
+                else:
+                    # Just a branch, no path
+                    source = f"{base_url}#{tree_part}"
+                    target_path = None
+            else:
+                # Handle case where .git is not in URL
+                parts = source.split("/", 3)  # Split into max 4 parts
+                if len(parts) >= 4:
+                    source = "/".join(parts[:3])  # First 3 parts are the repo URL
+                    target_path = "/".join(parts[3:])  # Rest is the target directory
+        # If we parsed a branch, append it to the repo URL
+        if branch:
+            source = f"{source}#{branch}"
+        # Get the working directory from git module using context manager
+        git_context = extract_from_git_repo(source, target_path)
+        with git_context as working_dir:
+            # Handle the working directory by merging all SQL files
+            from pg_compose_cli.merge import merge_sql
+            import tempfile
+            
+            # Create a temporary directory for the merged file
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Merge all SQL files in the working directory
+                merge_sql(working_dir, temp_dir, 'tables', 'views', 'materialized_views', 'functions', 'data_types')
+                
+                # Read the merged file
+                sorted_path = os.path.join(temp_dir, "sorted.sql")
+                if os.path.exists(sorted_path):
+                    with open(sorted_path, "r", encoding="utf-8") as f:
+                        return extract_build_queries(f.read())
+                else:
+                    # If no SQL files found, return empty list
+                    return []
+
     if os.path.isfile(source):
         if source.endswith(".sql"):
             with open(source, "r", encoding="utf-8") as f:
