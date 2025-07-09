@@ -16,6 +16,14 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.append(f"DROP FUNCTION {obj['object_name']};")
         elif obj["query_type"] == "index":
             commands.append(f"DROP INDEX {obj['object_name']};")
+        elif obj["query_type"] == "grant":
+            # For grants, we need to REVOKE the permissions
+            # Extract grant info from query_text
+            grant_sql = obj.get("query_text", "")
+            if grant_sql:
+                # Convert GRANT to REVOKE
+                revoke_sql = grant_sql.replace("GRANT ", "REVOKE ").replace(" TO ", " FROM ")
+                commands.append(_ensure_semicolon(revoke_sql))
     
     # Handle created objects
     for obj in diff_result.get("created", []):
@@ -35,6 +43,11 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.append(f"CREATE FUNCTION {obj['object_name']} {_extract_function_definition(obj)};")
         elif obj["query_type"] == "index":
             commands.append(f"CREATE INDEX {obj['object_name']} {_extract_index_definition(obj)};")
+        elif obj["query_type"] == "grant":
+            # For grants, use the original GRANT statement
+            grant_sql = obj.get("query_text", "")
+            if grant_sql:
+                commands.append(_ensure_semicolon(grant_sql))
     
     # Handle changed objects
     for obj in diff_result.get("changed", []):
@@ -44,6 +57,8 @@ def generate_alter_commands(diff_result: Dict) -> List[str]:
             commands.extend(_generate_view_alter_commands(obj))
         elif obj["query_type"] == "function":
             commands.extend(_generate_function_alter_commands(obj))
+        elif obj["query_type"] == "grant":
+            commands.extend(_generate_grant_alter_commands(obj))
     
     return commands
 
@@ -187,6 +202,28 @@ def _generate_function_alter_commands(obj: Dict) -> List[str]:
     # For functions, we typically drop and recreate
     commands.append(f"DROP FUNCTION {obj['object_name']};")
     commands.append(f"CREATE FUNCTION {obj['object_name']} {_extract_function_definition(obj)};")
+    
+    return commands
+
+def _generate_grant_alter_commands(obj: Dict) -> List[str]:
+    """Generate ALTER commands for grant changes."""
+    commands = []
+    
+    # For grants, we need to handle the change by revoking old and granting new
+    ast_diff = obj.get("ast_diff", {})
+    
+    # Get the old and new grant statements
+    old_grant = obj.get("from_hash", "")  # This would need to be enhanced to get actual old grant
+    new_grant = obj.get("query_text", "")
+    
+    if old_grant and new_grant:
+        # Convert old GRANT to REVOKE
+        revoke_sql = old_grant.replace("GRANT ", "REVOKE ").replace(" TO ", " FROM ")
+        commands.append(_ensure_semicolon(revoke_sql))
+    
+    # Add the new grant
+    if new_grant:
+        commands.append(_ensure_semicolon(new_grant))
     
     return commands
 

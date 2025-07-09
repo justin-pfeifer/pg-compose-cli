@@ -129,7 +129,7 @@ def extract_build_queries(sql: str) -> list[dict]:
             if view:
                 object_name = view.relname.lower()
             query = getattr(node, "query", None)
-            if query and hasattr(query, "fromClause"):
+            if query and hasattr(query, "fromClause") and query.fromClause:
                 for clause in query.fromClause:
                     relname = getattr(clause, "relname", None)
                     if relname:
@@ -146,7 +146,7 @@ def extract_build_queries(sql: str) -> list[dict]:
                 elif hasattr(into, 'rel'):
                     object_name = into.rel.relname.lower()
             query = getattr(node, "query", None)
-            if query and hasattr(query, "fromClause"):
+            if query and hasattr(query, "fromClause") and query.fromClause:
                 for clause in query.fromClause:
                     relname = getattr(clause, "relname", None)
                     if relname:

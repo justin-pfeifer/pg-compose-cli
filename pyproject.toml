@@ -7,4 +7,4 @@ license = {text = "GPL-3.0-only"}
 dependencies = ["pglast", "psycopg[binary]"]
 
 [project.scripts]
-pg_compose = "pg_compose_cli.cli:main"
+pg-compose = "pg_compose_cli.cli:main"
