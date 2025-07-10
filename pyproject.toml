@@ -3,7 +3,7 @@ name = "pg-compose-core"
 version = "0.2.0"
 description = "Core library for comparing PostgreSQL schemas from SQL files or live connections"
 authors = [{ name = "Justin Pfeifer", email = "justin.pfeifer@protonmail.com" }]
-license = {text = "GPL-3.0-only"}
+license = "GPL-3.0-only"
 dependencies = ["pglast", "psycopg[binary]", "fastapi", "uvicorn", "jinja2", "markdown"]
 
 [project.optional-dependencies]
@@ -18,6 +18,9 @@ test = [
 
 [project.scripts]
 pg-compose = "pg_compose_core.cli:main"
+
+[tool.setuptools.packages]
+find = {include = ["pg_compose_core*"]}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
