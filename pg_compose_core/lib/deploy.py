@@ -4,13 +4,14 @@ from pg_compose_core.lib.diff import diff_schemas
 from pg_compose_core.lib.ast_objects import ASTList
 
 
+
+
 def diff_sort(
     source_a: str,
     source_b: str,
     *,
     schemas: Optional[List[str]] = None,
-    grants: bool = True,
-    verbose: bool = False
+    grants: bool = True
 ):
     """
     Generate sorted diff between two schema sources.
@@ -20,7 +21,6 @@ def diff_sort(
         source_b: Path to source B (file, directory, or connection string)
         schemas: Optional list of schemas to include
         grants: Whether to include grant statements
-        verbose: Whether to print verbose output
     
     Returns:
         Sorted ASTList containing the diff commands
@@ -29,14 +29,16 @@ def diff_sort(
     schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=False)
     schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=False)
     
-    if verbose:
+    # Access global verbosity from CLI module
+    import pg_compose_core.cli.cli as cli_module
+    if cli_module.VERBOSE:
         print(f"Loaded {len(schema_a)} objects from source A")
         print(f"Loaded {len(schema_b)} objects from source B")
     
     # Generate diff as ASTList
     diff_result = diff_schemas(schema_a, schema_b)
     
-    if verbose:
+    if cli_module.VERBOSE:
         print(f"Generated {len(diff_result)} alter commands")
     
     # Sort by dependencies and return

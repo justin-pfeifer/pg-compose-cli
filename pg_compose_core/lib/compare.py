@@ -7,6 +7,8 @@ import os
 from typing import Optional, List, Union
 
 
+
+
 def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool = True, use_ast_objects: bool = True) -> Union[List[dict], ASTList]:
     """Load schema objects from a file, connection string, directory, or raw SQL string."""
     if source.startswith("postgres://"):
@@ -147,7 +149,6 @@ def compare_sources(
     source_b: str,
     *,
     schemas: Optional[List[str]] = None,
-    verbose: bool = True,
     grants: bool = True,
     use_ast_objects: bool = True
 ) -> Union[dict, 'ASTList']:
@@ -166,7 +167,9 @@ def compare_sources(
 
     result = diff_schemas(schema_a_dict, schema_b_dict)
 
-    if verbose:
+    # Access global verbosity from CLI module
+    import pg_compose_core.cli.cli as cli_module
+    if cli_module.VERBOSE:
         print("\nSchema Diff Results\n" + "=" * 40)
         # Filter commands by type for display
         create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE")]
