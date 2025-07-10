@@ -1,8 +1,9 @@
 
 import argparse
 import logging
-from pg_compose_core.lib.compare import compare_sources
-from pg_compose_core.lib.ast_objects import ASTList
+from pg_compose_core.lib.parser import load_source
+from pg_compose_core.lib.diff import diff_schemas
+from pg_compose_core.lib.ast_list import ASTList
 
 
 def write_to_file(commands, filename, output_format):
@@ -147,13 +148,10 @@ def main():
             grants=grants
         )
     else:
-        # Use traditional comparison approach
-        result = compare_sources(
-            args.source_a,
-            args.source_b,
-            schemas=args.schemas,
-            grants=grants
-        )
+        # Use simplified comparison approach
+        schema_a = load_source(args.source_a, schemas=args.schemas, grants=grants)
+        schema_b = load_source(args.source_b, schemas=args.schemas, grants=grants)
+        result = diff_schemas(schema_a, schema_b)
 
     # Handle deployment or diff output
     if args.deploy:

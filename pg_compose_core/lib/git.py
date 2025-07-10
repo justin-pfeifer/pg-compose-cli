@@ -3,8 +3,6 @@ import tempfile
 import subprocess
 import os
 import re
-from pg_compose_core.lib.merge import reorder_sql_file
-from pg_compose_core.lib.extract import extract_build_queries
 
 class GitRepoContext:
     """Context manager for git repository operations."""
@@ -22,8 +20,7 @@ class GitRepoContext:
         repo_url = self.repo_url
         if "#" in repo_url:
             repo_url, ref = repo_url.split("#", 1)
-        
-        # Use the original protocol - don't convert git:// to https://
+
         
         # Try different temp directory locations to avoid permission issues
         for temp_location in [None, os.path.expanduser("~/temp"), os.path.expanduser("~/Desktop/temp")]:

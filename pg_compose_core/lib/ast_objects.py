@@ -24,6 +24,17 @@ class BuildStage(Enum):
     GRANT = "grant"
     UNKNOWN = "unknown"
 
+
+class ResourceType(Enum):
+    """Enumeration of resource types that can be granted on."""
+    TABLE = "table"
+    VIEW = "view"
+    FUNCTION = "function"
+    SEQUENCE = "sequence"
+    SCHEMA = "schema"
+    DATABASE = "database"
+    UNKNOWN = "unknown"
+
 @dataclass
 class ASTObject:
     """
@@ -33,6 +44,7 @@ class ASTObject:
         command: The SQL command text
         object_name: Name of the database object (e.g., table name, view name)
         query_type: Type of SQL statement (CREATE TABLE, GRANT, etc.)
+        resource_type: Type of resource being operated on (for GRANT statements)
         dependencies: List of object names this object depends on
         query_hash: Hash of the normalized SQL for deduplication
         query_start_pos: Start position of the query in the original SQL
@@ -43,6 +55,7 @@ class ASTObject:
     command: str
     object_name: Optional[str] = None
     query_type: BuildStage = BuildStage.UNKNOWN
+    resource_type: ResourceType = ResourceType.UNKNOWN
     dependencies: List[str] = field(default_factory=list)
     query_hash: Optional[str] = None
     query_start_pos: int = 0
@@ -82,6 +95,7 @@ class ASTObject:
             "query_text": self.command,
             "object_name": self.object_name,
             "query_type": self.query_type.value,
+            "resource_type": self.resource_type.value,
             "dependencies": self.dependencies,
             "query_hash": self.query_hash,
             "query_start_pos": self.query_start_pos,
@@ -96,6 +110,7 @@ class ASTObject:
             command=data.get("query_text", ""),
             object_name=data.get("object_name"),
             query_type=BuildStage(data.get("query_type", "unknown")),
+            resource_type=ResourceType(data.get("resource_type", "unknown")),
             dependencies=data.get("dependencies", []),
             query_hash=data.get("query_hash"),
             query_start_pos=data.get("query_start_pos", 0),
@@ -107,6 +122,13 @@ class ASTObject:
         """String representation for debugging."""
         return f"ASTObject({self.query_type.value}: {self.object_name or 'unnamed'})"
     
+    @property
+    def qualified_name(self) -> str:
+        """Get the fully qualified name (schema.object_name)."""
+        if self.schema and self.object_name:
+            return f"{self.schema}.{self.object_name}"
+        return self.object_name or ""
+    
     def __repr__(self) -> str:
         """Detailed representation for debugging."""
         return (f"ASTObject(command='{self.command[:50]}...', "
@@ -116,52 +138,4 @@ class ASTObject:
 
 
 
-class ASTList:
-    """
-    Container for a list of ASTObject instances, with utilities for merging, sorting, diffing, and exporting to SQL.
-    """
-    def __init__(self, objects: Optional[List[ASTObject]] = None):
-        self.objects: List[ASTObject] = objects or []
-
-    def __iter__(self):
-        return iter(self.objects)
-
-    def __len__(self):
-        return len(self.objects)
-
-    def __getitem__(self, idx):
-        return self.objects[idx]
-
-    def merge(self, other: 'ASTList') -> 'ASTList':
-        # Combine and deduplicate by (object_name, query_type, query_hash)
-        combined = self.objects + other.objects
-        seen = set()
-        deduped = []
-        for obj in combined:
-            key = (obj.object_name, obj.query_type, obj.query_hash)
-            if key not in seen:
-                seen.add(key)
-                deduped.append(obj)
-        return ASTList(deduped)
-
-    def sort(self) -> 'ASTList':
-        from .sorter import sort_queries
-        sorted_objs = sort_queries(self.objects, use_object_names=False, grant_handling=True)
-        return ASTList(sorted_objs)
-
-    def to_sql(self) -> str:
-        # Output SQL for all objects in order
-        return "\n\n".join(obj.command for obj in self.objects)
-
-    def to_dict_list(self) -> List[dict]:
-        return [obj.to_dict() for obj in self.objects]
-
-    @classmethod
-    def from_dict_list(cls, dicts: List[dict]) -> 'ASTList':
-        return cls([ASTObject.from_dict(d) for d in dicts])
-
-    def __str__(self):
-        return f"ASTList({len(self.objects)} objects)"
-
-    def __repr__(self):
-        return f"ASTList(objects={self.objects!r})" 
+ 

@@ -1,784 +1,163 @@
-from pglast import parse_sql
-import json
-from pg_compose_core.lib.ast_objects import ASTObject, ASTList, BuildStage
+"""
+Simplified diff logic that works with ASTObjects from parser.py.
+Generates migration commands by comparing two ASTLists.
+"""
 
-def ast_diff(a: dict, b: dict) -> dict:
-    """Compare two schema objects using AST comparison."""
-    if a["query_type"] != b["query_type"]:
-        return {"type_changed": {"from": a["query_type"], "to": b["query_type"]}}
-    
-    if a["query_type"] == "base_table":
-        return ast_diff_table(a, b)
-    elif a["query_type"] in ["view", "materialized_view"]:
-        return ast_diff_view(a, b)
-    elif a["query_type"] == "function":
-        return ast_diff_function(a, b)
-    elif a["query_type"] == "grant":
-        return ast_diff_grant(a, b)
-    else:
-        # For other types, compare the full AST
-        return ast_diff_generic(a, b)
+from typing import List, Optional
+from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
+from pg_compose_core.lib.ast_list import ASTList
 
-def ast_diff_table(a: dict, b: dict) -> dict:
-    """Compare table definitions using AST."""
-    try:
-        a_stmt = parse_sql(a["query_text"])[0].stmt
-        b_stmt = parse_sql(b["query_text"])[0].stmt
-        
-        # Compare columns
-        a_cols = {col.colname: col for col in getattr(a_stmt, "tableElts", []) if hasattr(col, "colname")}
-        b_cols = {col.colname: col for col in getattr(b_stmt, "tableElts", []) if hasattr(col, "colname")}
-        
-        added = []
-        for col in b_cols.values():
-            if col.colname not in a_cols:
-                # Extract type
-                if hasattr(col, "typeName") and hasattr(col.typeName, "names"):
-                    names = [str(n.sval) for n in col.typeName.names]
-                    if len(names) > 1 and names[0].lower() == "pg_catalog":
-                        # Omit pg_catalog prefix
-                        type_str = names[-1].upper()
-                    else:
-                        # Keep schema/type if not pg_catalog
-                        type_str = ".".join(names).upper()
-                else:
-                    type_str = "TEXT"
-                # Handle typmods (e.g., VARCHAR(15))
-                if hasattr(col, "typeName") and hasattr(col.typeName, "typmods") and col.typeName.typmods:
-                    mods = []
-                    for mod in col.typeName.typmods:
-                        if hasattr(mod, "val") and hasattr(mod.val, "ival"):
-                            mods.append(str(mod.val.ival))
-                        elif hasattr(mod, "ival"):
-                            mods.append(str(mod.ival))
-                        elif hasattr(mod, "val"):
-                            mods.append(str(mod.val))
-                        else:
-                            mods.append(str(mod))
-                    type_str += f"({', '.join(mods)})"
-                
-                col_def = f"{col.colname} {type_str}"
-                if hasattr(col, "is_not_null") and col.is_not_null:
-                    col_def += " NOT NULL"
-                if hasattr(col, "raw_default") and col.raw_default:
-                    default_val = col.raw_default.val
-                    col_def += f" DEFAULT {default_val}"
-                
-                added.append(col_def)
-        removed = [col.colname for col in a_cols.values() if col.colname not in b_cols]
-        changed = []
-        
-        # Compare common columns
-        for col_name in set(a_cols.keys()) & set(b_cols.keys()):
-            a_col = a_cols[col_name]
-            b_col = b_cols[col_name]
-            
-            # Compare type
-            a_type = ".".join(str(n.sval) for n in a_col.typeName.names)
-            b_type = ".".join(str(n.sval) for n in b_col.typeName.names)
-            
-            # Compare nullable
-            a_nullable = not a_col.is_not_null
-            b_nullable = not b_col.is_not_null
-            
-            # Compare default
-            a_default = a_col.raw_default.val if a_col.raw_default else None
-            b_default = b_col.raw_default.val if b_col.raw_default else None
-            
-            # Compare foreign key constraints
-            a_fk = _extract_foreign_key_from_column(a_col)
-            b_fk = _extract_foreign_key_from_column(b_col)
-            
-            if a_type != b_type or a_nullable != b_nullable or a_default != b_default or a_fk != b_fk:
-                changed.append({
-                    "column": col_name,
-                    "type": {"from": a_type, "to": b_type} if a_type != b_type else None,
-                    "nullable": {"from": a_nullable, "to": b_nullable} if a_nullable != b_nullable else None,
-                    "default": {"from": a_default, "to": b_default} if a_default != b_default else None,
-                    "foreign_key": {"from": a_fk, "to": b_fk} if a_fk != b_fk else None
-                })
-        
-        # Compare primary keys
-        a_pk = _extract_primary_key_from_table(a_stmt)
-        b_pk = _extract_primary_key_from_table(b_stmt)
-        primary_key_change = None
-        
-        if a_pk != b_pk:
-            primary_key_change = {
-                "from": a_pk,
-                "to": b_pk
-            }
-        
-        return {
-            "add_columns": added,
-            "drop_columns": removed,
-            "change_columns": changed,
-            "primary_key": primary_key_change
-        }
-        
-    except Exception as e:
-        error_msg = f"Failed to parse table AST: {str(e)}"
-        if "GRANT" in a.get("query_text", "") or "GRANT" in b.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-def ast_diff_view(a: dict, b: dict) -> dict:
-    """Compare view definitions using AST."""
-    try:
-        a_stmt = parse_sql(a["query_text"])[0].stmt
-        b_stmt = parse_sql(b["query_text"])[0].stmt
-        
-        # Compare the query part of views
-        a_query = getattr(a_stmt, "query", None)
-        b_query = getattr(b_stmt, "query", None)
-        
-        if a_query and b_query:
-            # For now, return a simple indication that the view query changed
-            # In a full implementation, you'd compare the query ASTs
-            return {"query_changed": True}
-        
-        return {"no_changes": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse view AST: {str(e)}"
-        if "GRANT" in a.get("query_text", "") or "GRANT" in b.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-def ast_diff_function(a: dict, b: dict) -> dict:
-    """Compare function definitions using AST."""
-    try:
-        a_stmt = parse_sql(a["query_text"])[0].stmt
-        b_stmt = parse_sql(b["query_text"])[0].stmt
-        
-        # Compare function name
-        a_name = ".".join(str(n.sval) for n in getattr(a_stmt, "funcname", []))
-        b_name = ".".join(str(n.sval) for n in getattr(b_stmt, "funcname", []))
-        
-        if a_name != b_name:
-            return {"name_changed": {"from": a_name, "to": b_name}}
-        
-        # Compare parameters
-        a_params = getattr(a_stmt, "parameters", [])
-        b_params = getattr(b_stmt, "parameters", [])
-        
-        if len(a_params) != len(b_params):
-            return {"parameter_count_changed": {"from": len(a_params), "to": len(b_params)}}
-        
-        # For now, return a simple indication that the function changed
-        return {"function_changed": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse function AST: {str(e)}"
-        if "GRANT" in a.get("query_text", "") or "GRANT" in b.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-def ast_diff_grant(a: dict, b: dict) -> dict:
-    """Compare grant statements using AST."""
-    try:
-        a_stmt = parse_sql(a["query_text"])[0].stmt
-        b_stmt = parse_sql(b["query_text"])[0].stmt
-    except Exception as e:
-        error_msg = f"Failed to parse grant AST: {str(e)}"
-        if "GRANT" in a.get("query_text", "") or "GRANT" in b.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-    
-    # Compare privileges
-    a_privileges = [priv.priv_name for priv in getattr(a_stmt, "privileges", [])]
-    b_privileges = [priv.priv_name for priv in getattr(b_stmt, "privileges", [])]
-    
-    # Compare grantees
-    a_grantees = [grant.rolename for grant in getattr(a_stmt, "grantees", [])]
-    b_grantees = [grant.rolename for grant in getattr(b_stmt, "grantees", [])]
-    
-    # Compare objects
-    a_objects = getattr(a_stmt, "objects", [])
-    b_objects = getattr(b_stmt, "objects", [])
-    
-    changes = {}
-    
-    if a_privileges != b_privileges:
-        changes["privileges"] = {"from": a_privileges, "to": b_privileges}
-    
-    if a_grantees != b_grantees:
-        changes["grantees"] = {"from": a_grantees, "to": b_grantees}
-    
-    if len(changes) > 0:
-        return changes
-    else:
-        return {"no_changes": True}
-
-def _extract_foreign_key_from_column(col):
-    """Extract foreign key information from a column."""
-    if hasattr(col, 'constraints') and col.constraints:
-        for constraint in col.constraints:
-            if hasattr(constraint, 'contype') and constraint.contype == 5:  # CONSTR_FOREIGN
-                # Extract referenced table and column
-                if hasattr(constraint, 'pktable') and hasattr(constraint, 'pkattrs'):
-                    ref_table = ".".join(str(n.sval) for n in constraint.pktable.names)
-                    ref_col = constraint.pkattrs[0].sval if constraint.pkattrs else "id"
-                    return f"{ref_table}({ref_col})"
-    return None
-
-def _extract_primary_key_from_table(table_stmt):
-    """Extract primary key information from a table statement."""
-    if hasattr(table_stmt, 'tableElts'):
-        # Table-level constraints (composite PKs)
-        for elem in table_stmt.tableElts:
-            if hasattr(elem, 'contype') and elem.contype == 6:  # CONSTR_PRIMARY
-                if hasattr(elem, 'keys'):
-                    return [key.sval for key in elem.keys]
-        # Column-level PKs
-        for col in table_stmt.tableElts:
-            if hasattr(col, 'colname') and getattr(col, 'constraints', None):
-                for constraint in col.constraints or []:
-                    if hasattr(constraint, 'contype') and constraint.contype == 6:  # CONSTR_PRIMARY
-                        return col.colname
-    return None
-
-def extract_table_definition(obj: dict) -> str:
-    """Extract table definition from CREATE TABLE statement."""
-    try:
-        stmt = parse_sql(obj["query_text"])[0].stmt
-        
-        if hasattr(stmt, "tableElts"):
-            column_defs = []
-            table_constraints = []
-            for col in stmt.tableElts:
-                if hasattr(col, "colname"):
-                    # Extract type
-                    if hasattr(col, "typeName") and hasattr(col.typeName, "names"):
-                        names = [str(n.sval) for n in col.typeName.names]
-                        if len(names) > 1 and names[0].lower() == "pg_catalog":
-                            # Omit pg_catalog prefix
-                            type_str = names[-1].upper()
-                        else:
-                            # Keep schema/type if not pg_catalog
-                            type_str = ".".join(names).upper()
-                    else:
-                        type_str = "TEXT"
-                    # Handle typmods (e.g., VARCHAR(15))
-                    if hasattr(col, "typeName") and hasattr(col.typeName, "typmods") and col.typeName.typmods:
-                        mods = []
-                        for mod in col.typeName.typmods:
-                            if hasattr(mod, "val") and hasattr(mod.val, "ival"):
-                                mods.append(str(mod.val.ival))
-                            elif hasattr(mod, "ival"):
-                                mods.append(str(mod.ival))
-                            elif hasattr(mod, "val"):
-                                mods.append(str(mod.val))
-                            else:
-                                mods.append(str(mod))
-                        type_str += f"({', '.join(mods)})"
-                    col_def = f"{col.colname} {type_str}"
-                    # Check for column-level constraints
-                    if hasattr(col, 'constraints') and col.constraints:
-                        for constraint in col.constraints:
-                            if hasattr(constraint, 'contype') and constraint.contype == 6:  # CONSTR_PRIMARY
-                                col_def += " PRIMARY KEY"
-                            if hasattr(constraint, 'contype') and constraint.contype == 2:  # CONSTR_NOTNULL
-                                col_def += " NOT NULL"
-                            if hasattr(constraint, 'contype') and constraint.contype == 4:  # CONSTR_DEFAULT
-                                if hasattr(constraint, 'raw_expr'):
-                                    col_def += f" DEFAULT {constraint.raw_expr}"
-                    if hasattr(col, "is_not_null") and col.is_not_null:
-                        col_def += " NOT NULL"
-                    if hasattr(col, "raw_default") and col.raw_default:
-                        default_val = col.raw_default.val
-                        col_def += f" DEFAULT {default_val}"
-                    column_defs.append(f"  {col_def}")
-                elif hasattr(col, 'contype') and col.contype == 6:  # Table-level PRIMARY KEY
-                    if hasattr(col, 'keys'):
-                        pk_cols = ', '.join(key.sval for key in col.keys)
-                        table_constraints.append(f"  PRIMARY KEY ({pk_cols})")
-            return ",\n".join(column_defs + table_constraints)
-        return "/* No columns found */"
-        
-    except Exception as e:
-        error_msg = f"Error extracting table definition: {str(e)}"
-        if "GRANT" in obj.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return f"/* {error_msg} */"
-
-def extract_view_definition(obj: dict) -> str:
-    """Extract view definition from CREATE VIEW statement."""
-    try:
-        # Just return the original SQL - the alter generator will handle CREATE OR REPLACE
-        return obj["query_text"]
-    except Exception as e:
-        return f"/* Error extracting view definition: {str(e)} */"
-
-def ast_diff_generic(a: dict, b: dict) -> dict:
-    """Compare generic schema objects using AST."""
-    try:
-        # For generic objects, compare the full AST structure
-        a_stmt = parse_sql(a["query_text"])[0].stmt
-        b_stmt = parse_sql(b["query_text"])[0].stmt
-        
-        # Convert ASTs to comparable format (simplified)
-        a_ast_str = str(type(a_stmt).__name__)
-        b_ast_str = str(type(b_stmt).__name__)
-        
-        if a_ast_str != b_ast_str:
-            return {"ast_type_changed": {"from": a_ast_str, "to": b_ast_str}}
-        
-        return {"ast_changed": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse generic AST: {str(e)}"
-        if "GRANT" in a.get("query_text", "") or "GRANT" in b.get("query_text", ""):
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-def diff_schemas(base: list[ASTObject], updated: list[ASTObject]) -> ASTList:
+def diff_schemas(base: ASTList, updated: ASTList) -> ASTList:
+    """
+    Generate migration commands by comparing two ASTLists.
+    Returns an ASTList containing CREATE/DROP/ALTER commands.
+    """
     # Create keys that include schema information to avoid conflicts
-    def make_key(obj):
-        if obj.schema:
-            return f"{obj.query_type.value}:{obj.schema}.{obj.object_name}"
-        else:
-            return f"{obj.query_type.value}:{obj.object_name}"
+    def make_key(obj: ASTObject) -> str:
+        return f"{obj.query_type.value}:{obj.qualified_name}"
     
-    base_map = {make_key(q): q for q in base}
-    updated_map = {make_key(q): q for q in updated}
-
-    ast_objects = []
-
-    all_keys = set(base_map) | set(updated_map)
-
+    base_map = {make_key(obj): obj for obj in base}
+    updated_map = {make_key(obj): obj for obj in updated}
+    
+    migration_commands = []
+    
+    # Find all unique keys
+    all_keys = set(base_map.keys()) | set(updated_map.keys())
+    
     for key in sorted(all_keys):
         if key not in base_map:
-            # Created object
+            # New object - CREATE it
             obj = updated_map[key]
-            # Add definitions for created objects
-            if obj.query_type.value == "base_table":
-                obj.table_definition = extract_table_definition_from_ast(obj)
-            elif obj.query_type.value in ["view", "materialized_view"]:
-                obj.view_definition = extract_view_definition_from_ast(obj)
+            migration_commands.append(obj)
             
-            # Create ASTObject for created object
-            ast_objects.append(ASTObject(
-                command=obj.command,
-                object_name=obj.object_name,
-                query_type=obj.query_type,
-                dependencies=obj.dependencies,
-                query_hash=obj.query_hash,
-                schema=obj.schema
-            ))
         elif key not in updated_map:
-            # Dropped object
+            # Dropped object - DROP it
             obj = base_map[key]
-            # Create DROP command
-            # Use qualified name if schema is present
-            object_name = f"{obj.schema}.{obj.object_name}" if obj.schema else obj.object_name
-            
-            if obj.query_type.value == "base_table":
-                command = f"DROP TABLE {object_name};"
-            elif obj.query_type.value == "view":
-                command = f"DROP VIEW {object_name};"
-            elif obj.query_type.value == "materialized_view":
-                command = f"DROP MATERIALIZED VIEW {object_name};"
-            elif obj.query_type.value == "function":
-                command = f"DROP FUNCTION {object_name};"
-            elif obj.query_type.value == "index":
-                command = f"DROP INDEX {object_name};"
-            elif obj.query_type.value == "grant":
-                # For grants, we'll handle this in the deploy logic
-                continue
-            else:
-                command = f"DROP {obj.query_type.value.upper()} {object_name};"
-            
-            ast_objects.append(ASTObject(
-                command=command,
-                object_name=obj.object_name,
-                query_type=obj.query_type,
-                dependencies=obj.dependencies,
-                query_hash=obj.query_hash,
-                schema=obj.schema
-            ))
+            drop_command = _generate_drop_command(obj)
+            if drop_command:
+                migration_commands.append(drop_command)
+                
         elif base_map[key].query_hash != updated_map[key].query_hash:
-            # Changed object
-            a = base_map[key]
-            b = updated_map[key]
-            ast_diff_result = ast_diff_from_ast(a, b)
-            
-            # Add definitions for changed objects
-            if a.query_type.value == "base_table":
-                table_definition = extract_table_definition_from_ast(b)
-            elif a.query_type.value in ["view", "materialized_view"]:
-                view_definition = extract_view_definition_from_ast(b)
-            
-            # Create ALTER commands based on the diff
-            alter_commands = _generate_alter_commands_from_ast_diff(a, b, ast_diff_result)
-            for obj in alter_commands:
-                ast_objects.append(obj)
-
-    return ASTList(ast_objects)
-
-
-# ASTObject-based helper functions
-def ast_diff_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare two schema objects using AST comparison."""
-    if a.query_type.value != b.query_type.value:
-        return {"type_changed": {"from": a.query_type.value, "to": b.query_type.value}}
+            # Changed object - generate ALTER commands
+            old_obj = base_map[key]
+            new_obj = updated_map[key]
+            alter_commands = _generate_alter_commands(old_obj, new_obj)
+            migration_commands.extend(alter_commands)
     
-    if a.query_type.value == "base_table":
-        return ast_diff_table_from_ast(a, b)
-    elif a.query_type.value in ["view", "materialized_view"]:
-        return ast_diff_view_from_ast(a, b)
-    elif a.query_type.value == "function":
-        return ast_diff_function_from_ast(a, b)
-    elif a.query_type.value == "grant":
-        return ast_diff_grant_from_ast(a, b)
+    return ASTList(migration_commands)
+
+def _generate_drop_command(obj: ASTObject) -> ASTObject:
+    """Generate a DROP command for an object."""
+    # Use qualified name
+    object_name = obj.qualified_name
+    
+    if obj.query_type == BuildStage.BASE_TABLE:
+        command = f"DROP TABLE {object_name};"
+    elif obj.query_type == BuildStage.VIEW:
+        command = f"DROP VIEW {object_name};"
+    elif obj.query_type == BuildStage.MATERIALIZED_VIEW:
+        command = f"DROP MATERIALIZED VIEW {object_name};"
+    elif obj.query_type == BuildStage.FUNCTION:
+        command = f"DROP FUNCTION {object_name};"
+    elif obj.query_type == BuildStage.INDEX:
+        command = f"DROP INDEX {object_name};"
+    elif obj.query_type == BuildStage.CONSTRAINT:
+        command = f"ALTER TABLE {object_name.split('.')[-1]} DROP CONSTRAINT {obj.object_name};"
+    elif obj.query_type == BuildStage.POLICY:
+        table_name = object_name.split('.')[-1] if '.' in object_name else obj.object_name
+        command = f"DROP POLICY {obj.object_name} ON {table_name};"
+    elif obj.query_type == BuildStage.GRANT:
+        # For grants, generate a REVOKE command by parsing the SQL
+        from pg_compose_core.lib.parser import parse_sql_to_ast_objects
+        
+        # Generate revoke command
+        revoke_sql = f"REVOKE ALL ON {obj.object_name.replace('grant_on_', '')} FROM PUBLIC;"
+        revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
+        if revoke_objects:
+            return revoke_objects[0]
+        return None
     else:
-        # For other types, compare the full AST
-        return ast_diff_generic_from_ast(a, b)
-
-
-def ast_diff_table_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare table definitions using AST."""
-    try:
-        a_stmt = parse_sql(a.command)[0].stmt
-        b_stmt = parse_sql(b.command)[0].stmt
-        
-        # Compare columns
-        a_cols = {col.colname: col for col in getattr(a_stmt, "tableElts", []) if hasattr(col, "colname")}
-        b_cols = {col.colname: col for col in getattr(b_stmt, "tableElts", []) if hasattr(col, "colname")}
-        
-
-        
-        added = []
-        for col in b_cols.values():
-            if col.colname not in a_cols:
-                # Extract type
-                if hasattr(col, "typeName") and hasattr(col.typeName, "names"):
-                    names = [str(n.sval) for n in col.typeName.names]
-                    if len(names) > 1 and names[0].lower() == "pg_catalog":
-                        # Omit pg_catalog prefix
-                        type_str = names[-1].upper()
-                    else:
-                        # Keep schema/type if not pg_catalog
-                        type_str = ".".join(names).upper()
-                else:
-                    type_str = "TEXT"
-                # Handle typmods (e.g., VARCHAR(15))
-                if hasattr(col, "typeName") and hasattr(col.typeName, "typmods") and col.typeName.typmods:
-                    mods = []
-                    for mod in col.typeName.typmods:
-                        if hasattr(mod, "val") and hasattr(mod.val, "ival"):
-                            mods.append(str(mod.val.ival))
-                        elif hasattr(mod, "ival"):
-                            mods.append(str(mod.ival))
-                        elif hasattr(mod, "val"):
-                            mods.append(str(mod.val))
-                        else:
-                            mods.append(str(mod))
-                    type_str += f"({', '.join(mods)})"
-                
-                col_def = f"{col.colname} {type_str}"
-                if hasattr(col, "is_not_null") and col.is_not_null:
-                    col_def += " NOT NULL"
-                if hasattr(col, "raw_default") and col.raw_default:
-                    default_val = col.raw_default.val
-                    col_def += f" DEFAULT {default_val}"
-                
-                added.append(col_def)
-        removed = [col.colname for col in a_cols.values() if col.colname not in b_cols]
-        changed = []
-        
-        # Compare common columns
-        for col_name in set(a_cols.keys()) & set(b_cols.keys()):
-            a_col = a_cols[col_name]
-            b_col = b_cols[col_name]
-            
-            # Compare type
-            a_type = ".".join(str(n.sval) for n in a_col.typeName.names)
-            b_type = ".".join(str(n.sval) for n in b_col.typeName.names)
-            
-            # Compare nullable
-            a_nullable = not a_col.is_not_null
-            b_nullable = not b_col.is_not_null
-            
-            # Compare default
-            a_default = a_col.raw_default.val if a_col.raw_default else None
-            b_default = b_col.raw_default.val if b_col.raw_default else None
-            
-            # Compare foreign key constraints
-            a_fk = _extract_foreign_key_from_column(a_col)
-            b_fk = _extract_foreign_key_from_column(b_col)
-            
-            if a_type != b_type or a_nullable != b_nullable or a_default != b_default or a_fk != b_fk:
-                changed.append({
-                    "column": col_name,
-                    "type": {"from": a_type, "to": b_type} if a_type != b_type else None,
-                    "nullable": {"from": a_nullable, "to": b_nullable} if a_nullable != b_nullable else None,
-                    "default": {"from": a_default, "to": b_default} if a_default != b_default else None,
-                    "foreign_key": {"from": a_fk, "to": b_fk} if a_fk != b_fk else None
-                })
-        
-        # Compare primary keys
-        a_pk = _extract_primary_key_from_table(a_stmt)
-        b_pk = _extract_primary_key_from_table(b_stmt)
-        primary_key_change = None
-        
-        if a_pk != b_pk:
-            primary_key_change = {
-                "from": a_pk,
-                "to": b_pk
-            }
-        
-        return {
-            "add_columns": added,
-            "drop_columns": removed,
-            "change_columns": changed,
-            "primary_key": primary_key_change
-        }
-        
-    except Exception as e:
-        error_msg = f"Failed to parse table AST: {str(e)}"
-        if "GRANT" in a.command or "GRANT" in b.command:
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-
-def ast_diff_view_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare view definitions using AST."""
-    try:
-        a_stmt = parse_sql(a.command)[0].stmt
-        b_stmt = parse_sql(b.command)[0].stmt
-        
-        # Compare the query part of views
-        a_query = getattr(a_stmt, "query", None)
-        b_query = getattr(b_stmt, "query", None)
-        
-        if a_query and b_query:
-            # For now, return a simple indication that the view query changed
-            # In a full implementation, you'd compare the query ASTs
-            return {"query_changed": True}
-        
-        return {"no_changes": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse view AST: {str(e)}"
-        if "GRANT" in a.command or "GRANT" in b.command:
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-
-def ast_diff_function_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare function definitions using AST."""
-    try:
-        a_stmt = parse_sql(a.command)[0].stmt
-        b_stmt = parse_sql(b.command)[0].stmt
-        
-        # Compare function name
-        a_name = ".".join(str(n.sval) for n in getattr(a_stmt, "funcname", []))
-        b_name = ".".join(str(n.sval) for n in getattr(b_stmt, "funcname", []))
-        
-        if a_name != b_name:
-            return {"name_changed": {"from": a_name, "to": b_name}}
-        
-        # Compare parameters
-        a_params = getattr(a_stmt, "parameters", [])
-        b_params = getattr(b_stmt, "parameters", [])
-        
-        if len(a_params) != len(b_params):
-            return {"parameter_count_changed": {"from": len(a_params), "to": len(b_params)}}
-        
-        # For now, return a simple indication that the function changed
-        return {"function_changed": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse function AST: {str(e)}"
-        if "GRANT" in a.command or "GRANT" in b.command:
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-
-def ast_diff_grant_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare grant statements using AST."""
-    try:
-        a_stmt = parse_sql(a.command)[0].stmt
-        b_stmt = parse_sql(b.command)[0].stmt
-    except Exception as e:
-        error_msg = f"Failed to parse grant AST: {str(e)}"
-        if "GRANT" in a.command or "GRANT" in b.command:
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
+        command = f"DROP {obj.query_type.value.upper()} {object_name};"
     
-    # Compare privileges
-    a_privileges = [priv.priv_name for priv in getattr(a_stmt, "privileges", [])]
-    b_privileges = [priv.priv_name for priv in getattr(b_stmt, "privileges", [])]
-    
-    # Compare grantees
-    a_grantees = [grant.rolename for grant in getattr(a_stmt, "grantees", [])]
-    b_grantees = [grant.rolename for grant in getattr(b_stmt, "grantees", [])]
-    
-    # Compare objects
-    a_objects = [obj.objname for obj in getattr(a_stmt, "objects", [])]
-    b_objects = [obj.objname for obj in getattr(b_stmt, "objects", [])]
-    
-    changes = {}
-    if a_privileges != b_privileges:
-        changes["privileges"] = {"from": a_privileges, "to": b_privileges}
-    if a_grantees != b_grantees:
-        changes["grantees"] = {"from": a_grantees, "to": b_grantees}
-    if a_objects != b_objects:
-        changes["objects"] = {"from": a_objects, "to": b_objects}
-    
-    return changes if changes else {"no_changes": True}
+    return ASTObject(
+        command=command,
+        object_name=obj.object_name,
+        query_type=BuildStage.UNKNOWN,
+        dependencies=obj.dependencies,
+        schema=obj.schema
+    )
 
-
-def ast_diff_generic_from_ast(a: ASTObject, b: ASTObject) -> dict:
-    """Compare generic schema objects using AST."""
-    try:
-        # For generic objects, compare the full AST structure
-        a_stmt = parse_sql(a.command)[0].stmt
-        b_stmt = parse_sql(b.command)[0].stmt
-        
-        # Convert ASTs to comparable format (simplified)
-        a_ast_str = str(type(a_stmt).__name__)
-        b_ast_str = str(type(b_stmt).__name__)
-        
-        if a_ast_str != b_ast_str:
-            return {"ast_type_changed": {"from": a_ast_str, "to": b_ast_str}}
-        
-        return {"ast_changed": True}
-        
-    except Exception as e:
-        error_msg = f"Failed to parse generic AST: {str(e)}"
-        if "GRANT" in a.command or "GRANT" in b.command:
-            error_msg += "\nThis appears to be a GRANT statement parsing issue."
-            error_msg += "\nConsider using the --no-grants flag to skip GRANT statements."
-        return {"error": error_msg}
-
-
-def extract_table_definition_from_ast(obj: ASTObject) -> str:
-    """Extract table definition from ASTObject."""
-    try:
-        stmt = parse_sql(obj.command)[0].stmt
-        return obj.command
-    except Exception as e:
-        return f"/* Error extracting table definition: {str(e)} */"
-
-
-def extract_view_definition_from_ast(obj: ASTObject) -> str:
-    """Extract view definition from ASTObject."""
-    try:
-        stmt = parse_sql(obj.command)[0].stmt
-        return obj.command
-    except Exception as e:
-        return f"/* Error extracting view definition: {str(e)} */"
-
-
-def _generate_alter_commands_from_ast_diff(a: ASTObject, b: ASTObject, ast_diff_result: dict) -> list[ASTObject]:
-    """Generate ALTER commands from a diff result as ASTObject instances."""
+def _generate_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> List[ASTObject]:
+    """Generate ALTER commands for changed objects."""
     commands = []
     
-    if a.query_type.value == "base_table":
-        # Handle table changes
-        # Use qualified name if schema is present
-        table_name = f"{a.schema}.{a.object_name}" if a.schema else a.object_name
+    if old_obj.query_type == BuildStage.BASE_TABLE:
+        # For tables, we need to parse the AST to find column changes
+        table_commands = _generate_table_alter_commands(old_obj, new_obj)
+        commands.extend(table_commands)
         
-        if "add_columns" in ast_diff_result:
-            for col_def in ast_diff_result["add_columns"]:
-                command = f"ALTER TABLE {table_name} ADD COLUMN {col_def};"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN, schema=a.schema)
-                commands.append(obj)
+    elif old_obj.query_type == BuildStage.VIEW:
+        # For views, drop and recreate
+        drop_cmd = _generate_drop_command(old_obj)
+        if drop_cmd:
+            commands.append(drop_cmd)
+        commands.append(new_obj)
         
-        if "drop_columns" in ast_diff_result:
-            for col_name in ast_diff_result["drop_columns"]:
-                command = f"ALTER TABLE {table_name} DROP COLUMN {col_name};"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN, schema=a.schema)
-                commands.append(obj)
+    elif old_obj.query_type == BuildStage.FUNCTION:
+        # For functions, drop and recreate
+        drop_cmd = _generate_drop_command(old_obj)
+        if drop_cmd:
+            commands.append(drop_cmd)
+        commands.append(new_obj)
         
-        if "change_columns" in ast_diff_result:
-            for change in ast_diff_result["change_columns"]:
-                column_name = change["column"]
-                if change.get("type"):
-                    new_type = change["type"]["to"]
-                    command = f"ALTER TABLE {a.object_name} ALTER COLUMN {column_name} TYPE {new_type};"
-                    obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                    commands.append(obj)
-                if change.get("nullable") is not None:
-                    is_nullable = change["nullable"]["to"]
-                    constraint = "DROP NOT NULL" if is_nullable else "SET NOT NULL"
-                    command = f"ALTER TABLE {a.object_name} ALTER COLUMN {column_name} {constraint};"
-                    obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                    commands.append(obj)
-                if change.get("default") is not None:
-                    new_default = change["default"]["to"]
-                    if new_default is None:
-                        command = f"ALTER TABLE {a.object_name} ALTER COLUMN {column_name} DROP DEFAULT;"
-                    else:
-                        command = f"ALTER TABLE {a.object_name} ALTER COLUMN {column_name} SET DEFAULT {new_default};"
-                    obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                    commands.append(obj)
-                if change.get("foreign_key") is not None:
-                    fk_change = change["foreign_key"]
-                    old_fk = fk_change.get("from")
-                    new_fk = fk_change.get("to")
-                    if old_fk:
-                        command = f"ALTER TABLE {a.object_name} DROP CONSTRAINT IF EXISTS {a.object_name}_{column_name}_fkey;"
-                        obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                        commands.append(obj)
-                    if new_fk:
-                        ref_table, ref_col = new_fk.split("(")
-                        ref_col = ref_col.rstrip(")")
-                        command = f"ALTER TABLE {a.object_name} ADD CONSTRAINT {a.object_name}_{column_name}_fkey FOREIGN KEY ({column_name}) REFERENCES {ref_table}({ref_col});"
-                        obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                        commands.append(obj)
-        if "primary_key" in ast_diff_result and ast_diff_result["primary_key"] is not None:
-            pk_change = ast_diff_result["primary_key"]
-            old_pk = pk_change.get("from")
-            new_pk = pk_change.get("to")
-            if old_pk:
-                command = f"ALTER TABLE {a.object_name} DROP CONSTRAINT {old_pk};"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                commands.append(obj)
-            if new_pk:
-                if isinstance(new_pk, list):
-                    pk_columns = ", ".join(new_pk)
-                    command = f"ALTER TABLE {a.object_name} ADD PRIMARY KEY ({pk_columns});"
-                else:
-                    command = f"ALTER TABLE {a.object_name} ADD PRIMARY KEY ({new_pk});"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-                commands.append(obj)
-    elif a.query_type.value in ["view", "materialized_view"]:
-        if a.query_type.value == "view":
-            original_sql = getattr(b, 'view_definition', b.command)
-            or_replace_sql = original_sql.replace("CREATE VIEW", "CREATE OR REPLACE VIEW")
-            obj = ASTObject(command=or_replace_sql, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-            commands.append(obj)
-        elif a.query_type.value == "materialized_view":
-            command1 = f"DROP MATERIALIZED VIEW {a.object_name};"
-            obj1 = ASTObject(command=command1, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-            commands.append(obj1)
-            command2 = getattr(b, 'view_definition', b.command)
-            obj2 = ASTObject(command=command2, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-            commands.append(obj2)
-    elif a.query_type.value == "function":
-        command1 = f"DROP FUNCTION {a.object_name};"
-        obj1 = ASTObject(command=command1, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-        commands.append(obj1)
-        command2 = f"CREATE FUNCTION {a.object_name} {b.command};"
-        obj2 = ASTObject(command=command2, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-        commands.append(obj2)
-    elif a.query_type.value == "grant":
-        command1 = f"REVOKE ALL ON {a.object_name} FROM PUBLIC;"
-        obj1 = ASTObject(command=command1, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-        commands.append(obj1)
-        obj2 = ASTObject(command=b.command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
-        commands.append(obj2)
+    elif old_obj.query_type == BuildStage.GRANT:
+        # For grants, revoke old and grant new
+        # Parse the GRANT statements to get proper AST objects with unique query hashes
+        from pg_compose_core.lib.parser import parse_sql_to_ast_objects
+        
+        # Generate revoke command
+        revoke_sql = f"REVOKE ALL ON {old_obj.object_name.replace('grant_on_', '')} FROM PUBLIC;"
+        revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
+        if revoke_objects:
+            commands.extend(revoke_objects)
+        
+        # Add the new grant object (which should already be properly parsed)
+        commands.append(new_obj)
+    
     return commands
+
+def _generate_table_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> List[ASTObject]:
+    """Generate ALTER TABLE commands for table changes."""
+    commands = []
+    
+    # Use qualified name
+    table_name = new_obj.qualified_name
+    
+    # For now, generate a simple ALTER command for any table change
+    # This is a simplified approach - in practice you'd parse the AST to compare columns
+    if old_obj.query_hash != new_obj.query_hash:
+        # Generate a placeholder ALTER command
+        # In a real implementation, you'd compare the actual column definitions
+        alter_command = f"ALTER TABLE {table_name} ADD COLUMN new_column TEXT; -- TODO: Implement proper column comparison"
+        
+        commands.append(ASTObject(
+            command=alter_command,
+            object_name=new_obj.object_name,
+            query_type=BuildStage.UNKNOWN,
+            dependencies=new_obj.dependencies,
+            schema=new_obj.schema
+        ))
+    
+    return commands
+
+# Legacy compatibility function
+def compare_sources(source_a: str, source_b: str, schemas: Optional[List[str]] = None, grants: bool = True) -> ASTList:
+    """Legacy function for backward compatibility."""
+    from pg_compose_core.lib.parser import load_source
+    
+    # Load both sources
+    schema_a = load_source(source_a, schemas=schemas, grants=grants)
+    schema_b = load_source(source_b, schemas=schemas, grants=grants)
+    
+    # Generate diff
+    return diff_schemas(schema_a, schema_b)

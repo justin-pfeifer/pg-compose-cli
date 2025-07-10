@@ -1,5 +1,4 @@
 import subprocess
-from pg_compose_core.lib.extract import extract_build_queries
 from typing import Optional, List
 
 def extract_from_postgres(conn_str: str, schemas: Optional[List[str]] = None) -> list[dict]:
@@ -22,4 +21,3 @@ def extract_from_postgres(conn_str: str, schemas: Optional[List[str]] = None) ->
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"pg_dump failed:\n{e.stderr.decode()}")
 
-    return extract_build_queries(result.stdout.decode())
