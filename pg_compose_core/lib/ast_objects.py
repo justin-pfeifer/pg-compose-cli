@@ -146,7 +146,7 @@ class ASTList:
 
     def sort(self) -> 'ASTList':
         from .sorter import sort_queries
-        sorted_objs = sort_queries(self.objects, use_object_names=True, grant_handling=True)
+        sorted_objs = sort_queries(self.objects, use_object_names=False, grant_handling=True)
         return ASTList(sorted_objs)
 
     def to_sql(self) -> str:

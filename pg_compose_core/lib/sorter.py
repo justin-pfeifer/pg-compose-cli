@@ -25,11 +25,10 @@ def sort_alter_commands(command_objects: List[Union[Dict, ASTObject]]) -> List[U
 
 def _get_object_name(obj: Union[dict, ASTObject]) -> Optional[str]:
     """Extract object_name from various object types."""
-    # For alter commands, use query_hash as the unique key
     if isinstance(obj, ASTObject):
-        return getattr(obj, 'query_hash', None) or obj.object_name
+        return obj.object_name
     elif isinstance(obj, dict):
-        return obj.get("query_hash") or obj.get("object_name")
+        return obj.get("object_name")
     return None
 
 def _get_dependencies(obj: Union[dict, ASTObject]) -> List[str]:

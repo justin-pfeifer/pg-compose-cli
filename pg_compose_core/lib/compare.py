@@ -156,11 +156,8 @@ def compare_sources(
     schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=True)
     schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=True)
 
-    # Convert to dict format for diff_schemas
-    schema_a_dict = schema_a.to_dict_list()
-    schema_b_dict = schema_b.to_dict_list()
-
-    result = diff_schemas(schema_a_dict, schema_b_dict)
+    # Generate diff as ASTList (diff_schemas now works with ASTObjects directly)
+    result = diff_schemas(schema_a, schema_b)
 
     import logging
     logging.info("\nSchema Diff Results\n" + "=" * 40)

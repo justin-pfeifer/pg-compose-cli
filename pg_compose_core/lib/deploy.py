@@ -26,14 +26,14 @@ def diff_sort(
         Sorted ASTList containing the diff commands
     """
     # Load both sources
-    schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=False)
-    schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=False)
+    schema_a = load_source(source_a, schemas=schemas, grants=grants)
+    schema_b = load_source(source_b, schemas=schemas, grants=grants)
     
     import logging
     logging.info(f"Loaded {len(schema_a)} objects from source A")
     logging.info(f"Loaded {len(schema_b)} objects from source B")
     
-    # Generate diff as ASTList
+    # Generate diff as ASTList (diff_schemas now works with ASTObjects directly)
     diff_result = diff_schemas(schema_a, schema_b)
     
     logging.info(f"Generated {len(diff_result)} alter commands")
