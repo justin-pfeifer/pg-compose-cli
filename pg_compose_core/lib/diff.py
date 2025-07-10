@@ -1,6 +1,6 @@
 from pglast import parse_sql
 import json
-from pg_compose_cli.ast_objects import ASTObject, ASTList, BuildStage
+from pg_compose_core.lib.ast_objects import ASTObject, ASTList, BuildStage
 
 def ast_diff(a: dict, b: dict) -> dict:
     """Compare two schema objects using AST comparison."""

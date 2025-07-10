@@ -1,7 +1,7 @@
 import os
-from pg_compose_cli.sorter import sort_queries, sort_alter_commands
-from pg_compose_cli.compare import load_source
-from pg_compose_cli.ast_objects import ASTList, ASTObject, BuildStage
+from pg_compose_core.lib.sorter import sort_queries, sort_alter_commands
+from pg_compose_core.lib.compare import load_source
+from pg_compose_core.lib.ast_objects import ASTList, ASTObject, BuildStage
 
 def test_sort_with_actual_sql_files():
     """Test sorting using actual SQL files from test directory"""

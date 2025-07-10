@@ -1,7 +1,7 @@
 import os
-from pg_compose_cli.ast_objects import ASTObject, ASTList, BuildStage
-from pg_compose_cli.deploy import generate_deploy_sql, generate_deploy_sql_list
-from pg_compose_cli.compare import load_source
+from pg_compose_core.lib.ast_objects import ASTObject, ASTList, BuildStage
+from pg_compose_core.lib.deploy import diff_sort
+from pg_compose_core.lib.compare import load_source
 
 def test_deploy_single_table():
     obj = ASTObject(
@@ -70,7 +70,8 @@ def test_deploy_alter_scenario_rewrite():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     v1 = os.path.join(base_dir, "users", "v1.sql")
     v2 = os.path.join(base_dir, "users", "v2.sql")
-    sql = generate_deploy_sql(v1, v2, grants=True, verbose=True)
+    result = diff_sort(v1, v2, grants=True, verbose=True)
+    sql = result.to_sql()
     print("\n==== GENERATED SQL ====")
     print(sql)
     print("==== END GENERATED SQL ====")

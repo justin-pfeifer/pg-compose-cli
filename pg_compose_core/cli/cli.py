@@ -1,7 +1,7 @@
 
 import argparse
-from pg_compose_cli.compare import compare_sources, generate_alter_commands_from_ast_lists
-from pg_compose_cli.ast_objects import ASTList
+from pg_compose_core.lib.compare import compare_sources
+from pg_compose_core.lib.ast_objects import ASTList
 
 def main():
     parser = argparse.ArgumentParser(
@@ -24,9 +24,9 @@ def main():
         help="Deploy schema changes to specified file (future: database connection)"
     )
     parser.add_argument(
-        "--dry-run",
+        "--prod",
         action="store_true",
-        help="Show what would be deployed without actually applying changes"
+        help="Deploy to production (default is preview mode)"
     )
     parser.add_argument(
         "--grants",
@@ -61,15 +61,16 @@ def main():
 
     if args.deploy and args.use_ast_objects:
         # Use new ASTList-based alter command generation
-        alter_ast_list = generate_alter_commands_from_ast_lists(
+        alter_ast_list = compare_sources(
             args.source_a,
             args.source_b,
             schemas=args.schemas,
             grants=grants,
+            use_ast_objects=True,
             verbose=not args.quiet
         )
         
-        if args.dry_run:
+        if not args.prod:
             print("DRY RUN - Would deploy the following commands:")
             print("=" * 50)
             for i, cmd in enumerate(alter_ast_list, 1):
@@ -102,7 +103,7 @@ def main():
         if args.deploy:
             if args.use_ast_objects:
                 # result is an ASTList, convert to SQL
-                if args.dry_run:
+                if not args.prod:
                     print("DRY RUN - Would deploy the following commands:")
                     print("=" * 50)
                     for i, obj in enumerate(result, 1):
@@ -122,10 +123,10 @@ def main():
                     print(f"Deployment commands written to: {args.deploy}")
             else:
                 # Traditional dict-based approach
-                from pg_compose_cli.alter_generator import generate_alter_commands
+                from pg_compose_core.lib.alter_generator import generate_alter_commands
                 alter_commands = generate_alter_commands(result)
                 
-                if args.dry_run:
+                if not args.prod:
                     print("DRY RUN - Would deploy the following commands:")
                     print("=" * 50)
                     for i, cmd in enumerate(alter_commands, 1):

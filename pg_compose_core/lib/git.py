@@ -3,8 +3,8 @@ import tempfile
 import subprocess
 import os
 import re
-from pg_compose_cli.merge import reorder_sql_file
-from pg_compose_cli.extract import extract_build_queries
+from pg_compose_core.lib.merge import reorder_sql_file
+from pg_compose_core.lib.extract import extract_build_queries
 
 class GitRepoContext:
     """Context manager for git repository operations."""

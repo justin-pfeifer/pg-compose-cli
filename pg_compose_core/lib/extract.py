@@ -2,7 +2,7 @@ import hashlib
 import re
 from pglast import parse_sql
 from typing import List, Union
-from .ast_objects import ASTObject, BuildStage, ASTList
+from pg_compose_core.lib.ast_objects import ASTObject, BuildStage, ASTList
 
 POSTGRES_BUILTINS = {
     "text", "varchar", "char", "int", "int4", "int8", "integer", "bigint", "smallint",

@@ -1,6 +1,6 @@
-from pg_compose_cli.compare import compare_sources
-from pg_compose_cli.deploy import generate_deploy_sql
-from pg_compose_cli.ast_objects import ASTList
+from pg_compose_core.lib.compare import compare_sources
+from pg_compose_core.lib.deploy import diff_sort
+from pg_compose_core.lib.ast_objects import ASTList
 import os
 
 def test_compare_users():
@@ -39,11 +39,12 @@ def test_alter_commands_from_ast_lists():
     source_a = os.path.join(base_dir, "users", "v1.sql")
     source_b = os.path.join(base_dir, "users", "v2.sql")
     
-    sql_output = generate_deploy_sql(
+    result = diff_sort(
         source_a, source_b, grants=True, verbose=False
     )
     
     # Should be able to convert to SQL
+    sql_output = result.to_sql()
     assert isinstance(sql_output, str), "Should be able to convert to SQL string"
     assert len(sql_output) > 0, "SQL output should not be empty"
     

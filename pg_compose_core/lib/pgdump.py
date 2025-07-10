@@ -1,5 +1,5 @@
 import subprocess
-from pg_compose_cli.extract import extract_build_queries
+from pg_compose_core.lib.extract import extract_build_queries
 from typing import Optional, List
 
 def extract_from_postgres(conn_str: str, schemas: Optional[List[str]] = None) -> list[dict]:

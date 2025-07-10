@@ -1,5 +1,5 @@
-from pg_compose_cli.extract import extract_build_queries
-from pg_compose_cli.ast_objects import ASTList
+from pg_compose_core.lib.extract import extract_build_queries
+from pg_compose_core.lib.ast_objects import ASTList
 import os
 from typing import Literal
 

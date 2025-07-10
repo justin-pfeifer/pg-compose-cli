@@ -1,20 +1,21 @@
-# pg-compose-cli
+# pg-compose-core
 
-A command-line tool for comparing PostgreSQL schemas from SQL files, Git repositories, or live databases. Perfect for database migration reviews, schema versioning, and detecting changes between environments.
+A core library for comparing PostgreSQL schemas from SQL files, Git repositories, or live databases. Provides both a command-line interface and a FastAPI web service for database migration reviews, schema versioning, and detecting changes between environments.
 
 ## Features
 
 - **Multiple Source Types**: Compare schemas from SQL files, Git repositories, or live PostgreSQL connections
-- **Directory Comparison**: Compare entire directories of SQL files (useful for feature branches)
 - **AST-based Diffing**: Uses PostgreSQL AST parsing for accurate schema comparison
 - **Normalized Output**: Ignores whitespace and comment differences for cleaner diffs
 - **Comprehensive Analysis**: Detects table, view, function, and other schema object changes
-- **Schema Deployment**: Generate and apply schema changes with safety options
+- **Web API**: FastAPI service for programmatic access
+- **CLI Interface**: Command-line tool for direct usage
+- **Schema Operations**: Sort, deploy, and merge schema definitions
 
 ## Installation
 
 ```bash
-pip install pg-compose-cli
+pip install pg-compose-core
 ```
 
 Or install from source:
@@ -27,76 +28,71 @@ pip install -e .
 
 ## Usage
 
-### Basic Command Structure
+### Command Line Interface
+
+#### Basic Command Structure
 
 ```bash
 pg-compose <source1> <source2> [options]
 ```
 
-### Source Types
+#### Source Types
 
 1. **SQL Files**: Direct path to a `.sql` file
 2. **Directories**: Path to a directory containing SQL files
 3. **Git Repositories**: Git repository URL
 4. **Live Database**: PostgreSQL connection string
 
-### Examples
-
-#### Compare Two SQL Files
+#### Examples
 
 ```bash
+# Compare two SQL files
 pg-compose schema_v1.sql schema_v2.sql
-```
 
-#### Compare Directories (Feature Branch Style)
-
-```bash
-pg-compose ./feature_branch/schema/ ./main_branch/schema/
-```
-
-#### Compare SQL File with Live Database
-
-```bash
+# Compare SQL file with live database
 pg-compose schema.sql "postgresql://user:pass@localhost:5432/dbname"
-```
 
-#### Compare Two Git Repositories
-
-```bash
+# Compare two Git repositories
 pg-compose "git://github.com/user/repo1.git" "git://github.com/user/repo2.git"
 ```
 
-#### Deploy Schema Changes
+### Web API
 
-Generate deployment commands and save to a file:
-
-```bash
-pg-compose schema_v1.sql schema_v2.sql --deploy migration.sql
-```
-
-Preview what would be deployed without applying changes:
+Start the API server:
 
 ```bash
-pg-compose schema_v1.sql schema_v2.sql --deploy migration.sql --dry-run
+uvicorn pg_compose_core.api:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Output Format
+#### Available Endpoints
 
-The tool outputs a structured diff showing:
+- **`GET /`** - Project documentation (README)
+- **`GET /docs`** - Interactive API documentation
+- **`GET /health`** - Health check
+- **`POST /compare`** - Compare two schema sources
+- **`POST /sort`** - Sort SQL statements by dependencies
+- **`POST /deploy`** - Deploy schema changes to database
+- **`POST /merge`** - Merge two schemas
 
-- **Added Objects**: New tables, views, functions, etc.
-- **Removed Objects**: Dropped tables, views, functions, etc.
-- **Modified Objects**: Changed definitions with detailed diffs
-- **Dependencies**: Related objects that may be affected
+#### API Examples
 
-When using `--deploy`, the output file contains SQL commands like:
+```bash
+# Compare schemas
+curl -X POST "http://localhost:8000/compare" \
+  -F "source_a=CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);" \
+  -F "source_b=CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT, email TEXT);" \
+  -F "output_format=sql"
 
-```sql
-ALTER TABLE users ADD COLUMN email VARCHAR(255);
-ALTER TABLE users ALTER COLUMN name TYPE VARCHAR(100);
-DROP TABLE old_table;
-CREATE TABLE new_table (...);
+# Sort SQL statements
+curl -X POST "http://localhost:8000/sort" \
+  -F "sql_content=CREATE INDEX idx_users_name ON users(name); CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);" \
+  -F "use_object_names=true" \
+  -F "grant_handling=after"
 ```
+
+## API Documentation
+
+Visit `http://localhost:8000/docs` for interactive API documentation with examples and request/response schemas.
 
 ## Use Cases
 
@@ -105,7 +101,13 @@ CREATE TABLE new_table (...);
 Compare your migration files against the current database state:
 
 ```bash
+# CLI
 pg-compose migrations/001_create_users.sql "postgresql://dev:pass@localhost:5432/dev_db"
+
+# API
+curl -X POST "http://localhost:8000/compare" \
+  -F "source_a=@migrations/001_create_users.sql" \
+  -F "source_b=postgresql://dev:pass@localhost:5432/dev_db"
 ```
 
 ### Feature Branch Comparison
@@ -113,7 +115,13 @@ pg-compose migrations/001_create_users.sql "postgresql://dev:pass@localhost:5432
 Compare schema changes between feature branches:
 
 ```bash
+# CLI
 pg-compose ./feature/add_user_roles/ ./main/
+
+# API
+curl -X POST "http://localhost:8000/compare" \
+  -F "source_a=git@github.com/user/repo.git#feature/add_user_roles" \
+  -F "source_b=git@github.com/user/repo.git#main"
 ```
 
 ### Environment Validation
@@ -121,19 +129,13 @@ pg-compose ./feature/add_user_roles/ ./main/
 Ensure staging and production schemas match:
 
 ```bash
+# CLI
 pg-compose "postgresql://staging:pass@staging:5432/app" "postgresql://prod:pass@prod:5432/app"
-```
 
-### Schema Deployment
-
-Generate deployment scripts for applying schema changes:
-
-```bash
-# Preview changes
-pg-compose production_schema.sql feature_schema.sql --deploy migration.sql --dry-run
-
-# Generate deployment script
-pg-compose production_schema.sql feature_schema.sql --deploy migration.sql
+# API
+curl -X POST "http://localhost:8000/compare" \
+  -F "source_a=postgresql://staging:pass@staging:5432/app" \
+  -F "source_b=postgresql://prod:pass@prod:5432/app"
 ```
 
 ## Development
@@ -141,29 +143,44 @@ pg-compose production_schema.sql feature_schema.sql --deploy migration.sql
 ### Running Tests
 
 ```bash
+# Install test dependencies
+pip install -e ".[test]"
+
+# Run tests
 python -m pytest tests/ -v
+
+# Run with coverage
+python -m pytest tests/ --cov=pg_compose_core --cov-report=html
 ```
 
 ### Project Structure
 
 ```
 pg-compose-cli/
-├── pg_compose_cli/          # Main package
-│   ├── cli.py              # Command-line interface
-│   ├── compare.py          # Core comparison logic
-│   ├── extract.py          # SQL parsing and extraction
-│   ├── diff.py             # Schema diffing algorithms
-│   ├── alter_generator.py  # Deployment command generation
-│   ├── merge.py            # SQL file merging
-│   ├── pgdump.py           # Database connection handling
-│   ├── git.py              # Git repository handling
-│   ├── catalog.py          # Schema catalog management
-│   └── sorter.py           # SQL dependency sorting
-├── tests/                  # Test suite
-│   ├── users/              # User table tests
-│   ├── feature_change/     # Feature branch tests
-│   └── table_removal/      # Schema removal tests
-└── pyproject.toml          # Package configuration
+├── pg_compose_core/        # Main package
+│   ├── cli/               # Command-line interface
+│   │   └── cli.py        # CLI entry point
+│   ├── api/              # FastAPI web service
+│   │   ├── api.py        # Main FastAPI app
+│   │   ├── health.py     # Health check endpoint
+│   │   ├── compare.py    # Schema comparison endpoint
+│   │   ├── sort.py       # SQL sorting endpoint
+│   │   ├── deploy.py     # Deployment endpoint
+│   │   ├── merge.py      # Schema merge endpoint
+│   │   ├── home.py       # Home page (README)
+│   │   ├── models.py     # Pydantic models
+│   │   └── templates/    # Jinja2 templates
+│   └── lib/              # Core library functionality
+│       ├── compare.py    # Schema comparison logic
+│       ├── extract.py    # SQL parsing and extraction
+│       ├── sorter.py     # SQL dependency sorting
+│       └── ast_objects.py # AST object definitions
+├── tests/                # Test suite
+│   ├── test_api.py       # API tests
+│   ├── test_compare.py   # Comparison tests
+│   ├── test_deploy.py    # Deployment tests
+│   └── test_sorter.py    # Sorting tests
+└── pyproject.toml        # Package configuration
 ```
 
 ## Requirements
@@ -174,8 +191,12 @@ pg-compose-cli/
 
 ## Dependencies
 
-- `pglast`: PostgreSQL AST parsing (built on libpg_query) - Copyright (c) 2018-2021, Lele Gaifax and contributors. Licensed under the GNU General Public License v3.0.
+- `pglast`: PostgreSQL AST parsing (built on libpg_query)
 - `psycopg[binary]`: PostgreSQL database connectivity
+- `fastapi`: Web API framework
+- `uvicorn`: ASGI server
+- `jinja2`: Template engine
+- `markdown`: Markdown rendering
 
 ## Contributing
 
@@ -187,22 +208,9 @@ pg-compose-cli/
 
 ## License
 
-- This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
-- See the LICENSE file for details.
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
+See the LICENSE file for details.
 
 ## Future Plans
 
 We intend to transition to our own direct Python wrapper for [libpg_query](https://github.com/pganalyze/libpg_query) in the future. This will allow for more control, performance, and flexibility in parsing PostgreSQL SQL, and will reduce our reliance on third-party AST libraries.
-
-## Third-Party Libraries
-
-This project uses the following libraries:
-
-- [pglast](https://github.com/lelit/pglast) (GPL-3.0): PostgreSQL AST parsing, built on libpg_query.
-- [libpg_query](https://github.com/pganalyze/libpg_query) (PostgreSQL License): C library for parsing PostgreSQL SQL.
-
-Please refer to each project's repository for their full license and attribution.
-
-## Author
-
-Justin Pfeifer - justin.pfeifer@protonmail.com

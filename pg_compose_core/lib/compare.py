@@ -1,7 +1,7 @@
-from pg_compose_cli.extract import extract_build_queries
-from pg_compose_cli.diff import diff_schemas
-from pg_compose_cli.pgdump import extract_from_postgres
-from pg_compose_cli.ast_objects import ASTList, BuildStage
+from pg_compose_core.lib.extract import extract_build_queries
+from pg_compose_core.lib.diff import diff_schemas
+from pg_compose_core.lib.pgdump import extract_from_postgres
+from pg_compose_core.lib.ast_objects import ASTList, BuildStage
 import json
 import os
 from typing import Optional, List, Union
@@ -17,7 +17,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
 
     # Handle git URLs
     if source.startswith("git://") or source.startswith("git@") or source.startswith("https://github.com/"):
-        from pg_compose_cli.git import extract_from_git_repo
+        from pg_compose_core.lib.git import extract_from_git_repo
         
         # Parse target path and branch from URL if present
         target_path = None
@@ -66,7 +66,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
                     objs = extract_build_queries(f.read(), use_ast_objects=use_ast_objects)
             else:
                 # It's a directory, merge all SQL files
-                from pg_compose_cli.merge import merge_sql
+                from pg_compose_core.lib.merge import merge_sql
                 import tempfile
                 
                 # Create a temporary directory for the merged file
@@ -108,7 +108,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
         return objs
     elif os.path.isdir(source):
         # Handle directory by merging all SQL files
-        from pg_compose_cli.merge import merge_sql
+        from pg_compose_core.lib.merge import merge_sql
         import tempfile
         
         # Create a temporary directory for the merged file

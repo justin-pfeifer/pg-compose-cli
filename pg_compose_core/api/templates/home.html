@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>pg-compose-core</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 40px;
+        line-height: 1.6;
+      }
+      .nav {
+        margin-bottom: 20px;
+      }
+      .nav a {
+        margin-right: 20px;
+      }
+      pre {
+        background: #f4f4f4;
+        padding: 10px;
+        overflow-x: auto;
+      }
+      code {
+        background: #f4f4f4;
+        padding: 2px 4px;
+      }
+      h1,
+      h2,
+      h3 {
+        color: #333;
+      }
+      a {
+        color: #0066cc;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="nav">
+      <a href="/docs">API Documentation</a>
+      <a href="/health">Health Check</a>
+    </div>
+    {{ readme_content | safe }}
+  </body>
+</html>
