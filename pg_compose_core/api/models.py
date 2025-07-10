@@ -12,9 +12,9 @@ class SortRequest(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response."""
-    status: str = Field(..., example="healthy")
-    version: str = Field(..., example="0.2.0")
+    status: str = Field(..., json_schema_extra={"example": "healthy"})
+    version: str = Field(..., json_schema_extra={"example": "0.2.0"})
 
 class ErrorResponse(BaseModel):
     """Error response model."""
-    detail: str = Field(..., example="An error occurred") 
+    detail: str = Field(..., json_schema_extra={"example": "An error occurred"}) 

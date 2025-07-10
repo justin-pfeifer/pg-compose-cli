@@ -16,10 +16,10 @@ router = APIRouter()
         "description": "Sorted SQL statements",
         "content": {
             "text/plain": {
-                "example": "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);\nCREATE INDEX idx_users_name ON users(name);\nGRANT SELECT ON users TO readonly;"
+                "examples": "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);\nCREATE INDEX idx_users_name ON users(name);\nGRANT SELECT ON users TO readonly;"
             },
             "application/json": {
-                "example": [
+                "examples": [
                     {
                         "type": "CREATE_TABLE",
                         "command": "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
@@ -45,7 +45,7 @@ router = APIRouter()
         "description": "Invalid input",
         "content": {
             "application/json": {
-                "example": {
+                "examples": {
                     "detail": "Must provide either sql or ast parameter"
                 }
             }
@@ -56,12 +56,12 @@ async def sort_sql(
     sql: Optional[str] = Body(
         None, 
         description="SQL content: raw SQL, file path, or git URL",
-        example="CREATE INDEX idx_users_name ON users(name); CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);"
+        examples="CREATE INDEX idx_users_name ON users(name); CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);"
     ),
     ast: Optional[List[Dict[str, Any]]] = Body(
         None, 
         description="List of ASTObject dictionaries",
-        example=[
+        examples=[
             {
                 "type": "CREATE_TABLE",
                 "command": "CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",

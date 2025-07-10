@@ -28,6 +28,47 @@ def normalize_sql(sql: str) -> str:
     
     return sql
 
+def extract_schema_info(rel_node) -> tuple[str, str]:
+    """
+    Extract schema and table name from a relation node.
+    
+    Returns:
+        tuple: (schema_name, table_name) where schema_name can be None
+    """
+    if not rel_node:
+        return None, None
+    
+    # Check for schema-qualified names
+    if hasattr(rel_node, "schemaname") and rel_node.schemaname:
+        schema = str(rel_node.schemaname.sval).lower() if hasattr(rel_node.schemaname, "sval") else str(rel_node.schemaname).lower()
+    else:
+        schema = None
+    
+    # Get table name
+    if hasattr(rel_node, "relname") and rel_node.relname:
+        table_name = str(rel_node.relname.sval).lower() if hasattr(rel_node.relname, "sval") else str(rel_node.relname).lower()
+    else:
+        table_name = None
+    
+    return schema, table_name
+
+
+def extract_qualified_name(rel_node) -> str:
+    """
+    Extract fully qualified name (schema.table) from a relation node.
+    
+    Returns:
+        str: Qualified name like "schema.table" or just "table" if no schema
+    """
+    schema, table_name = extract_schema_info(rel_node)
+    if schema and table_name:
+        return f"{schema}.{table_name}"
+    elif table_name:
+        return table_name
+    else:
+        return None
+
+
 def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTList, List[dict]]:
     results = []
     
@@ -94,8 +135,8 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
             query_type = "dependent_table" if fk_found else "base_table"
 
             rel = getattr(node, "relation", None)
-            if rel:
-                object_name = rel.relname.lower()
+            schema, table_name = extract_schema_info(rel)
+            object_name = table_name  # Keep unqualified name for backward compatibility
 
             for col in getattr(node, "tableElts", []) or []:
                 typename_node = getattr(col, "typeName", None)
@@ -106,7 +147,12 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
             for constraint in constraints:
                 pktable = getattr(constraint, "pktable", None)
                 if pktable:
-                    dependencies.append(pktable.relname.lower())
+                    # Extract qualified name for foreign key references
+                    fk_schema, fk_table = extract_schema_info(pktable)
+                    if fk_schema and fk_table:
+                        dependencies.append(f"{fk_schema}.{fk_table}")
+                    elif fk_table:
+                        dependencies.append(fk_table)
 
             # Extract SQL slice and create normalized hash
             start = raw_stmt.stmt_location
@@ -129,6 +175,7 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
                     dependencies=sorted(set(filtered_deps)),
                     query_start_pos=start,
                     query_end_pos=end,
+                    schema=schema,
                     ast_node=node
                 ))
             else:
@@ -139,7 +186,8 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
                     "query_end_pos": end,
                     "query_hash": query_hash,
                     "query_text": query_text,
-                    "dependencies": sorted(set(filtered_deps))
+                    "dependencies": sorted(set(filtered_deps)),
+                    "schema": schema
                 })
 
         elif typename == "CreateSeqStmt":
@@ -151,45 +199,53 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
         elif typename == "IndexStmt":
             query_type = "index"
             rel = getattr(node, "relation", None)
-            if rel:
-                dependencies.append(rel.relname.lower())
-                object_name = f"idx_{rel.relname.lower()}"
+            schema, table_name = extract_schema_info(rel)
+            if table_name:
+                # For indexes, we keep the unqualified table name in dependencies
+                # but store the schema for the index object itself
+                dependencies.append(table_name)
+                object_name = f"idx_{table_name}"
 
         elif typename == "AlterTableStmt":
             query_type = "constraint"
             rel = getattr(node, "relation", None)
-            if rel:
-                dependencies.append(rel.relname.lower())
-                object_name = f"alter_{rel.relname.lower()}"
+            schema, table_name = extract_schema_info(rel)
+            if table_name:
+                dependencies.append(table_name)
+                object_name = f"alter_{table_name}"
 
         elif typename == "ViewStmt":
             query_type = "view"
             view = getattr(node, "view", None)
-            if view:
-                object_name = view.relname.lower()
+            schema, table_name = extract_schema_info(view)
+            object_name = table_name
+            
             query = getattr(node, "query", None)
             if query and hasattr(query, "fromClause") and query.fromClause:
                 for clause in query.fromClause:
-                    relname = getattr(clause, "relname", None)
-                    if relname:
-                        dependencies.append(relname.lower())
+                    # Extract qualified names for dependencies
+                    dep_schema, dep_table = extract_schema_info(clause)
+                    if dep_schema and dep_table:
+                        dependencies.append(f"{dep_schema}.{dep_table}")
+                    elif dep_table:
+                        dependencies.append(dep_table)
 
         elif typename == "CreateTableAsStmt":
             objtype = getattr(node, "objtype", None)
             query_type = "materialized_view" if objtype == 23 else "base_table"
             into = getattr(node, "into", None)
-            if into:
-                # Handle different types of into clauses
-                if hasattr(into, 'relname'):
-                    object_name = into.relname.lower()
-                elif hasattr(into, 'rel'):
-                    object_name = into.rel.relname.lower()
+            schema, table_name = extract_schema_info(into)
+            object_name = table_name
+            
             query = getattr(node, "query", None)
             if query and hasattr(query, "fromClause") and query.fromClause:
                 for clause in query.fromClause:
-                    relname = getattr(clause, "relname", None)
-                    if relname:
-                        dependencies.append(relname.lower())
+                    # Extract qualified names for dependencies
+                    dep_schema, dep_table = extract_schema_info(clause)
+                    if dep_schema and dep_table:
+                        dependencies.append(f"{dep_schema}.{dep_table}")
+                    elif dep_table:
+                        dependencies.append(dep_table)
 
             # Extract SQL slice and create normalized hash
             start = raw_stmt.stmt_location
@@ -212,6 +268,7 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
                     dependencies=sorted(set(filtered_deps)),
                     query_start_pos=start,
                     query_end_pos=end,
+                    schema=schema,
                     ast_node=node
                 ))
             else:
@@ -222,7 +279,8 @@ def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTLi
                     "query_end_pos": end,
                     "query_hash": query_hash,
                     "query_text": query_text,
-                    "dependencies": sorted(set(filtered_deps))
+                    "dependencies": sorted(set(filtered_deps)),
+                    "schema": schema
                 })
 
         elif typename in ("CreateFunctionStmt", "CreateProcedureStmt"):

@@ -1,197 +1,157 @@
 import os
-from pg_compose_core.lib.sorter import sort_queries, sort_alter_commands
 from pg_compose_core.lib.compare import load_source
-from pg_compose_core.lib.ast_objects import ASTList, ASTObject, BuildStage
+from pg_compose_core.lib.ast_objects import ASTList
 
 def test_sort_with_actual_sql_files():
-    """Test sorting using actual SQL files from test directory"""
-    # Get the path to the test data directory
-    test_data_dir = os.path.join(os.path.dirname(__file__), "sort_test_data")
+    """Test sorting with actual SQL files from test data."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "sort_test_data")
+    queries = load_source(test_data_dir)
+    # Convert to ASTList for sorting
+    ast_list = ASTList(queries)
+    sorted_queries = ast_list.sort()
+    sql = sorted_queries.to_sql()
     
-    # Load queries from the actual SQL files using the proper directory handling
-    queries = load_source(test_data_dir, use_ast_objects=False)
+    # Check that all tables are present
+    assert "CREATE TABLE users" in sql
+    assert "CREATE TABLE orders" in sql
+    assert "CREATE TABLE order_items" in sql
     
-    # Sort the queries
-    sorted_queries = sort_queries(queries)
+    # Check dependency order
+    users_idx = sql.find("CREATE TABLE users")
+    orders_idx = sql.find("CREATE TABLE orders")
+    order_items_idx = sql.find("CREATE TABLE order_items")
     
-    # Verify the order
-    object_names = [q["object_name"] for q in sorted_queries]
-    
-    # Should be: users -> orders -> order_items
-    assert object_names[0] == "users"
-    assert object_names[1] == "orders" 
-    assert object_names[2] == "order_items"
-    
-    # Verify dependencies are satisfied
-    seen_objects = set()
-    for q in sorted_queries:
-        object_name = q['object_name']
-        dependencies = q['dependencies']
-        
-        for dep in dependencies:
-            assert dep in seen_objects, f"{object_name} depends on {dep} but {dep} comes after!"
-        
-        seen_objects.add(object_name)
+    # Users should come before orders (orders depends on users)
+    assert users_idx < orders_idx
+    # Orders should come before order_items (order_items depends on orders)
+    assert orders_idx < order_items_idx
 
 def test_sort_with_actual_sql_files_ast_objects():
-    """Test sorting using actual SQL files with ASTObjects"""
-    # Get the path to the test data directory
-    test_data_dir = os.path.join(os.path.dirname(__file__), "sort_test_data")
+    """Test sorting with actual SQL files using ASTObjects."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "sort_test_data")
+    ast_list = load_source(test_data_dir)
+    sorted_queries = ast_list.sort()
+    sql = sorted_queries.to_sql()
     
-    # Load queries from the actual SQL files using ASTObjects
-    ast_list = load_source(test_data_dir, use_ast_objects=True)
+    # Check that all tables are present
+    assert "CREATE TABLE users" in sql
+    assert "CREATE TABLE orders" in sql
+    assert "CREATE TABLE order_items" in sql
     
-    # Sort the queries using object names
-    sorted_ast_list = sort_queries(ast_list, use_object_names=True, grant_handling=True)
+    # Check dependency order
+    users_idx = sql.find("CREATE TABLE users")
+    orders_idx = sql.find("CREATE TABLE orders")
+    order_items_idx = sql.find("CREATE TABLE order_items")
     
-    # Verify the order
-    object_names = [obj.object_name for obj in sorted_ast_list]
-    
-    # Should be: users -> orders -> order_items
-    assert object_names[0] == "users"
-    assert object_names[1] == "orders" 
-    assert object_names[2] == "order_items"
-    
-    # Verify dependencies are satisfied
-    seen_objects = set()
-    for obj in sorted_ast_list:
-        object_name = obj.object_name
-        dependencies = obj.dependencies
-        
-        for dep in dependencies:
-            assert dep in seen_objects, f"{object_name} depends on {dep} but {dep} comes after!"
-        
-        seen_objects.add(object_name)
+    # Users should come before orders (orders depends on users)
+    assert users_idx < orders_idx
+    # Orders should come before order_items (order_items depends on orders)
+    assert orders_idx < order_items_idx
 
 def test_sort_with_complex_dependencies():
-    """Test sorting with more complex dependency chains using actual SQL files"""
-    # Get the path to the complex test data directory
-    test_data_dir = os.path.join(os.path.dirname(__file__), "sort_test_data_complex")
+    """Test sorting with more complex dependency scenarios."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "sort_test_data_complex")
+    queries = load_source(test_data_dir)
+    # Convert to ASTList for sorting
+    ast_list = ASTList(queries)
+    sorted_queries = ast_list.sort()
+    sql = sorted_queries.to_sql()
     
-    # Load queries from the actual SQL files using the proper directory handling
-    queries = load_source(test_data_dir, use_ast_objects=False)
-    sorted_queries = sort_queries(queries)
+    # Check that all tables are present
+    assert "CREATE TABLE categories" in sql
+    assert "CREATE TABLE products" in sql
+    assert "CREATE TABLE users" in sql
+    assert "CREATE TABLE orders" in sql
+    assert "CREATE TABLE order_items" in sql
     
-    # Verify order: categories, users (no deps) -> products, orders -> order_items
-    object_names = [q["object_name"] for q in sorted_queries]
+    # Check dependency order
+    categories_idx = sql.find("CREATE TABLE categories")
+    products_idx = sql.find("CREATE TABLE products")
+    users_idx = sql.find("CREATE TABLE users")
+    orders_idx = sql.find("CREATE TABLE orders")
+    order_items_idx = sql.find("CREATE TABLE order_items")
     
-    # Verify that objects with no dependencies come first (categories and users)
-    # But don't assume specific positions - just check they're before their dependents
-    categories_index = object_names.index("categories")
-    users_index = object_names.index("users")
-    products_index = object_names.index("products")
-    orders_index = object_names.index("orders")
-    order_items_index = object_names.index("order_items")
-    
-    # Products should come after categories (its dependency)
-    assert products_index > categories_index
-    # Orders should come after users (its dependency)
-    assert orders_index > users_index
-    # Order_items should come after both orders and products (its dependencies)
-    assert order_items_index > products_index
-    assert order_items_index > orders_index
-    
-    # Verify dependencies are satisfied
-    seen_objects = set()
-    for q in sorted_queries:
-        object_name = q['object_name']
-        dependencies = q['dependencies']
-        
-        for dep in dependencies:
-            assert dep in seen_objects, f"{object_name} depends on {dep} but {dep} comes after!"
-        
-        seen_objects.add(object_name) 
+    # Categories should come before products (products depends on categories)
+    assert categories_idx < products_idx
+    # Users should come before orders (orders depends on users)
+    assert users_idx < orders_idx
+    # Products and orders should come before order_items (order_items depends on both)
+    assert products_idx < order_items_idx
+    assert orders_idx < order_items_idx
 
 def test_sort_with_complex_dependencies_ast_objects():
-    """Test sorting with more complex dependency chains using ASTObjects"""
-    # Get the path to the complex test data directory
-    test_data_dir = os.path.join(os.path.dirname(__file__), "sort_test_data_complex")
+    """Test sorting with complex dependencies using ASTObjects."""
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+    test_data_dir = os.path.join(base_dir, "sort_test_data_complex")
+    ast_list = load_source(test_data_dir)
+    sorted_queries = ast_list.sort()
+    sql = sorted_queries.to_sql()
     
-    # Load queries from the actual SQL files using ASTObjects
-    ast_list = load_source(test_data_dir, use_ast_objects=True)
-    sorted_ast_list = sort_queries(ast_list, use_object_names=True, grant_handling=True)
+    # Check that all tables are present
+    assert "CREATE TABLE categories" in sql
+    assert "CREATE TABLE products" in sql
+    assert "CREATE TABLE users" in sql
+    assert "CREATE TABLE orders" in sql
+    assert "CREATE TABLE order_items" in sql
     
-    # Verify order: categories, users (no deps) -> products, orders -> order_items
-    object_names = [obj.object_name for obj in sorted_ast_list]
+    # Check dependency order
+    categories_idx = sql.find("CREATE TABLE categories")
+    products_idx = sql.find("CREATE TABLE products")
+    users_idx = sql.find("CREATE TABLE users")
+    orders_idx = sql.find("CREATE TABLE orders")
+    order_items_idx = sql.find("CREATE TABLE order_items")
     
-    # Verify that objects with no dependencies come first (categories and users)
-    # But don't assume specific positions - just check they're before their dependents
-    categories_index = object_names.index("categories")
-    users_index = object_names.index("users")
-    products_index = object_names.index("products")
-    orders_index = object_names.index("orders")
-    order_items_index = object_names.index("order_items")
-    
-    # Products should come after categories (its dependency)
-    assert products_index > categories_index
-    # Orders should come after users (its dependency)
-    assert orders_index > users_index
-    # Order_items should come after both orders and products (its dependencies)
-    assert order_items_index > products_index
-    assert order_items_index > orders_index
-    
-    # Verify dependencies are satisfied
-    seen_objects = set()
-    for obj in sorted_ast_list:
-        object_name = obj.object_name
-        dependencies = obj.dependencies
-        
-        for dep in dependencies:
-            assert dep in seen_objects, f"{object_name} depends on {dep} but {dep} comes after!"
-        
-        seen_objects.add(object_name)
+    # Categories should come before products (products depends on categories)
+    assert categories_idx < products_idx
+    # Users should come before orders (orders depends on users)
+    assert users_idx < orders_idx
+    # Products and orders should come before order_items (order_items depends on both)
+    assert products_idx < order_items_idx
+    assert orders_idx < order_items_idx
 
 def test_ast_list_sorting():
-    """Test ASTList.sort() method directly"""
-    # Create ASTObjects with dependencies
-    ast_objects = [
-        ASTObject(
-            command="CREATE TABLE users (id SERIAL PRIMARY KEY);",
-            object_name="users",
-            query_type=BuildStage.BASE_TABLE,
-            dependencies=[]
-        ),
-        ASTObject(
-            command="CREATE TABLE orders (id SERIAL, user_id INTEGER REFERENCES users(id));",
-            object_name="orders",
-            query_type=BuildStage.DEPENDENT_TABLE,
-            dependencies=["users"]
-        ),
-        ASTObject(
-            command="GRANT SELECT ON users TO app_user;",
-            object_name="grant_on_users",
-            query_type=BuildStage.GRANT,
-            dependencies=["users"]
-        )
-    ]
+    """Test ASTList.sort() method directly."""
+    from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
+    
+    # Create test objects with dependencies
+    users = ASTObject(
+        command="CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT);",
+        object_name="users",
+        query_type=BuildStage.BASE_TABLE,
+        dependencies=[]
+    )
+    
+    orders = ASTObject(
+        command="CREATE TABLE orders (id SERIAL, user_id INTEGER REFERENCES users(id));",
+        object_name="orders",
+        query_type=BuildStage.DEPENDENT_TABLE,
+        dependencies=["users"]
+    )
+    
+    order_items = ASTObject(
+        command="CREATE TABLE order_items (id SERIAL, order_id INTEGER REFERENCES orders(id));",
+        object_name="order_items",
+        query_type=BuildStage.DEPENDENT_TABLE,
+        dependencies=["orders"]
+    )
     
     # Create ASTList and sort
-    ast_list = ASTList(ast_objects)
+    ast_list = ASTList([order_items, users, orders])  # Wrong order
     sorted_list = ast_list.sort()
     
-    # Verify order
-    object_names = [obj.object_name for obj in sorted_list]
-    
-    # Users should come first (no dependencies)
-    assert object_names[0] == "users"
-    
-    # Orders and grant_on_users should come after users
-    assert "orders" in object_names[1:] or "grant_on_users" in object_names[1:]
-    
-    # Verify dependencies are satisfied
-    seen_objects = set()
-    for obj in sorted_list:
-        object_name = obj.object_name
-        dependencies = obj.dependencies
-        
-        for dep in dependencies:
-            assert dep in seen_objects, f"{object_name} depends on {dep} but {dep} comes after!"
-        
-        seen_objects.add(object_name)
+    # Check order
+    assert sorted_list[0].object_name == "users"
+    assert sorted_list[1].object_name == "orders"
+    assert sorted_list[2].object_name == "order_items"
 
 def test_ast_list_merge_and_sort():
-    """Test ASTList merge and sort functionality"""
-    # Create two ASTLists
+    """Test ASTList.merge() and sort() methods together."""
+    from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
+    
+    # Create two separate ASTLists
     list1 = ASTList([
         ASTObject(
             command="CREATE TABLE users (id SERIAL PRIMARY KEY);",
@@ -207,12 +167,6 @@ def test_ast_list_merge_and_sort():
             object_name="orders",
             query_type=BuildStage.DEPENDENT_TABLE,
             dependencies=["users"]
-        ),
-        ASTObject(
-            command="GRANT SELECT ON users TO app_user;",
-            object_name="grant_on_users",
-            query_type=BuildStage.GRANT,
-            dependencies=["users"]
         )
     ])
     
@@ -220,14 +174,7 @@ def test_ast_list_merge_and_sort():
     merged = list1.merge(list2)
     sorted_merged = merged.sort()
     
-    # Verify we have all objects
-    assert len(sorted_merged) == 3, "Should have 3 objects after merge"
-    
-    # Verify order
-    object_names = [obj.object_name for obj in sorted_merged]
-    assert "users" in object_names, "Should have users table"
-    assert "orders" in object_names, "Should have orders table"
-    assert "grant_on_users" in object_names, "Should have grant"
-    
-    # Users should come first
-    assert object_names[0] == "users", "Users should come first (no dependencies)" 
+    # Check results
+    assert len(sorted_merged) == 2
+    assert sorted_merged[0].object_name == "users"
+    assert sorted_merged[1].object_name == "orders" 

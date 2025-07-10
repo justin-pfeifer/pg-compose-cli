@@ -8,7 +8,7 @@ def test_compare_users():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     source_a = os.path.join(base_dir, "users", "v1.sql")
     source_b = os.path.join(base_dir, "users", "v2.sql")
-    result = compare_sources(source_a, source_b, verbose=False)
+    result = compare_sources(source_a, source_b)
     # result is now an ASTList of commands
     create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE TABLE")]
     drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP TABLE")]
@@ -24,7 +24,7 @@ def test_compare_users_with_ast_objects():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     source_a = os.path.join(base_dir, "users", "v1.sql")
     source_b = os.path.join(base_dir, "users", "v2.sql")
-    result = compare_sources(source_a, source_b, verbose=False, use_ast_objects=True)
+    result = compare_sources(source_a, source_b)
     create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE TABLE")]
     drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP TABLE")]
     alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER TABLE")]
@@ -40,7 +40,7 @@ def test_alter_commands_from_ast_lists():
     source_b = os.path.join(base_dir, "users", "v2.sql")
     
     result = diff_sort(
-        source_a, source_b, grants=True, verbose=False
+        source_a, source_b, grants=True
     )
     
     # Should be able to convert to SQL
@@ -57,7 +57,7 @@ def test_feature_change():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     v1_schema = os.path.join(base_dir, "feature_change", "v1", "public")
     v2_schema = os.path.join(base_dir, "feature_change", "v2", "public")
-    result = compare_sources(v1_schema, v2_schema, verbose=False)
+    result = compare_sources(v1_schema, v2_schema)
     alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER TABLE")]
     matview_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE MATERIALIZED VIEW")]
     # Should have changes for products table and dependent view
@@ -76,7 +76,7 @@ def test_feature_change_with_ast_objects():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     v1_schema = os.path.join(base_dir, "feature_change", "v1", "public")
     v2_schema = os.path.join(base_dir, "feature_change", "v2", "public")
-    result = compare_sources(v1_schema, v2_schema, verbose=False, use_ast_objects=True)
+    result = compare_sources(v1_schema, v2_schema)
     alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER TABLE")]
     matview_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE MATERIALIZED VIEW")]
     assert len(alter_cmds) >= 1, "Should have at least 1 ALTER TABLE command (products table)"
@@ -93,7 +93,7 @@ def test_table_removal():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     v1_schema = os.path.join(base_dir, "table_removal", "v1", "public")
     v2_schema = os.path.join(base_dir, "table_removal", "v2", "public")
-    result = compare_sources(v1_schema, v2_schema, verbose=False)
+    result = compare_sources(v1_schema, v2_schema)
     drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP TABLE")]
     # alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER TABLE")]
     create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE TABLE")]
@@ -120,8 +120,7 @@ def test_compare_against_git_origin():
     try:
         result = compare_sources(
             test_data_dir, 
-            f"{github_url}/tests/users", 
-            verbose=False
+            f"{github_url}/tests/users"
         )
         
         # Basic assertions - result is now an ASTList
@@ -147,8 +146,7 @@ def test_compare_local_vs_git():
     try:
         result = compare_sources(
             test_data_dir, 
-            f"{github_url}/tests/users", 
-            verbose=False
+            f"{github_url}/tests/users"
         )
         
         # Basic assertions - result is now an ASTList

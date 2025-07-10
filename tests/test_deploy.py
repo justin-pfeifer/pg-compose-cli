@@ -70,7 +70,7 @@ def test_deploy_alter_scenario_rewrite():
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     v1 = os.path.join(base_dir, "users", "v1.sql")
     v2 = os.path.join(base_dir, "users", "v2.sql")
-    result = diff_sort(v1, v2, grants=True, verbose=True)
+    result = diff_sort(v1, v2, grants=True)
     sql = result.to_sql()
     print("\n==== GENERATED SQL ====")
     print(sql)
@@ -86,7 +86,7 @@ def test_deploy_directory():
     # Use the sort_test_data directory
     base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__)))
     test_data_dir = os.path.join(base_dir, "sort_test_data")
-    ast_list = load_source(test_data_dir, use_ast_objects=True)
+    ast_list = load_source(test_data_dir)
     sql = ast_list.sort().to_sql()
     # Should contain all three tables in dependency order
     users_idx = sql.find("CREATE TABLE users")

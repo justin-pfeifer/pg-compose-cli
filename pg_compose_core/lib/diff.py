@@ -339,8 +339,15 @@ def ast_diff_generic(a: dict, b: dict) -> dict:
         return {"error": error_msg}
 
 def diff_schemas(base: list[ASTObject], updated: list[ASTObject]) -> ASTList:
-    base_map = {f"{q.query_type.value}:{q.object_name}": q for q in base}
-    updated_map = {f"{q.query_type.value}:{q.object_name}": q for q in updated}
+    # Create keys that include schema information to avoid conflicts
+    def make_key(obj):
+        if obj.schema:
+            return f"{obj.query_type.value}:{obj.schema}.{obj.object_name}"
+        else:
+            return f"{obj.query_type.value}:{obj.object_name}"
+    
+    base_map = {make_key(q): q for q in base}
+    updated_map = {make_key(q): q for q in updated}
 
     ast_objects = []
 
@@ -369,21 +376,24 @@ def diff_schemas(base: list[ASTObject], updated: list[ASTObject]) -> ASTList:
             # Dropped object
             obj = base_map[key]
             # Create DROP command
+            # Use qualified name if schema is present
+            object_name = f"{obj.schema}.{obj.object_name}" if obj.schema else obj.object_name
+            
             if obj.query_type.value == "base_table":
-                command = f"DROP TABLE {obj.object_name};"
+                command = f"DROP TABLE {object_name};"
             elif obj.query_type.value == "view":
-                command = f"DROP VIEW {obj.object_name};"
+                command = f"DROP VIEW {object_name};"
             elif obj.query_type.value == "materialized_view":
-                command = f"DROP MATERIALIZED VIEW {obj.object_name};"
+                command = f"DROP MATERIALIZED VIEW {object_name};"
             elif obj.query_type.value == "function":
-                command = f"DROP FUNCTION {obj.object_name};"
+                command = f"DROP FUNCTION {object_name};"
             elif obj.query_type.value == "index":
-                command = f"DROP INDEX {obj.object_name};"
+                command = f"DROP INDEX {object_name};"
             elif obj.query_type.value == "grant":
                 # For grants, we'll handle this in the deploy logic
                 continue
             else:
-                command = f"DROP {obj.query_type.value.upper()} {obj.object_name};"
+                command = f"DROP {obj.query_type.value.upper()} {object_name};"
             
             ast_objects.append(ASTObject(
                 command=command,
@@ -678,16 +688,19 @@ def _generate_alter_commands_from_ast_diff(a: ASTObject, b: ASTObject, ast_diff_
     
     if a.query_type.value == "base_table":
         # Handle table changes
+        # Use qualified name if schema is present
+        table_name = f"{a.schema}.{a.object_name}" if a.schema else a.object_name
+        
         if "add_columns" in ast_diff_result:
             for col_def in ast_diff_result["add_columns"]:
-                command = f"ALTER TABLE {a.object_name} ADD COLUMN {col_def};"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
+                command = f"ALTER TABLE {table_name} ADD COLUMN {col_def};"
+                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN, schema=a.schema)
                 commands.append(obj)
         
         if "drop_columns" in ast_diff_result:
             for col_name in ast_diff_result["drop_columns"]:
-                command = f"ALTER TABLE {a.object_name} DROP COLUMN {col_name};"
-                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN)
+                command = f"ALTER TABLE {table_name} DROP COLUMN {col_name};"
+                obj = ASTObject(command=command, object_name=a.object_name, query_type=BuildStage.UNKNOWN, schema=a.schema)
                 commands.append(obj)
         
         if "change_columns" in ast_diff_result:
