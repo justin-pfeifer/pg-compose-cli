@@ -31,18 +31,20 @@ def reorder_sql_file(
         f.write(sorted_ast_list.to_sql())
 
         if verbose:
+            import logging
             for obj in sorted_ast_list:
-                print(f"→ {obj.query_type.value}")
+                logging.info(f"→ {obj.query_type.value}")
                 if obj.object_name:
-                    print(f"   object: {obj.object_name}")
+                    logging.info(f"   object: {obj.object_name}")
                 if obj.dependencies:
-                    print("   depends on:")
+                    logging.info("   depends on:")
                     for d in obj.dependencies:
-                        print(f"     - {d}")
-                print("-" * 40)
+                        logging.info(f"     - {d}")
+                logging.info("-" * 40)
 
     if verbose:
-        print(f"\n✅ Reordered SQL written to: {output_path}")
+        import logging
+        logging.info(f"\n✅ Reordered SQL written to: {output_path}")
     
     return sorted_ast_list
 
@@ -82,7 +84,8 @@ def merge_sql(
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(final_ast_list.to_sql())
-        print(f"✅ Merged SQL written to: {output_path}")
+        import logging
+        logging.info(f"✅ Merged SQL written to: {output_path}")
     
     return final_ast_list
 

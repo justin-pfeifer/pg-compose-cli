@@ -149,40 +149,33 @@ def compare_sources(
     source_b: str,
     *,
     schemas: Optional[List[str]] = None,
-    grants: bool = True,
-    use_ast_objects: bool = True
-) -> Union[dict, 'ASTList']:
-    """Compare two schema sources and return diff result or ASTList of alter commands."""
+    grants: bool = True
+) -> 'ASTList':
+    """Compare two schema sources and return ASTList of alter commands."""
     
-    schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=use_ast_objects)
-    schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=use_ast_objects)
+    schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=True)
+    schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=True)
 
-    # Convert to dict format for diff_schemas if needed
-    if use_ast_objects:
-        schema_a_dict = schema_a.to_dict_list()
-        schema_b_dict = schema_b.to_dict_list()
-    else:
-        schema_a_dict = schema_a
-        schema_b_dict = schema_b
+    # Convert to dict format for diff_schemas
+    schema_a_dict = schema_a.to_dict_list()
+    schema_b_dict = schema_b.to_dict_list()
 
     result = diff_schemas(schema_a_dict, schema_b_dict)
 
-    # Access global verbosity from CLI module
-    import pg_compose_core.cli.cli as cli_module
-    if cli_module.VERBOSE:
-        print("\nSchema Diff Results\n" + "=" * 40)
-        # Filter commands by type for display
-        create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE")]
-        drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP")]
-        alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER")]
-        
-        for obj in create_cmds:
-            print(f"[CREATE] {obj.query_type.value} {obj.object_name}")
-        for obj in drop_cmds:
-            print(f"[DROP]   {obj.query_type.value} {obj.object_name}")
-        for obj in alter_cmds:
-            print(f"[ALTER]  {obj.query_type.value} {obj.object_name}")
-        print("=" * 40)
+    import logging
+    logging.info("\nSchema Diff Results\n" + "=" * 40)
+    # Filter commands by type for display
+    create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE")]
+    drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP")]
+    alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER")]
+    
+    for obj in create_cmds:
+        logging.info(f"[CREATE] {obj.query_type.value} {obj.object_name}")
+    for obj in drop_cmds:
+        logging.info(f"[DROP]   {obj.query_type.value} {obj.object_name}")
+    for obj in alter_cmds:
+        logging.info(f"[ALTER]  {obj.query_type.value} {obj.object_name}")
+    logging.info("=" * 40)
 
     return result
 

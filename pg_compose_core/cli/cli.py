@@ -1,10 +1,71 @@
 
 import argparse
+import logging
 from pg_compose_core.lib.compare import compare_sources
 from pg_compose_core.lib.ast_objects import ASTList
 
-# Global verbosity setting
-VERBOSE = False
+
+def write_to_file(commands, filename, output_format):
+    """Write commands to file in the specified format."""
+    with open(filename, 'w') as f:
+        if output_format == "sql":
+            if hasattr(commands, 'to_sql'):
+                f.write(commands.to_sql())
+            else:
+                f.write('\n'.join(commands))
+        elif output_format == "json":
+            import json
+            if hasattr(commands, 'to_dict_list'):
+                json.dump(commands.to_dict_list(), f, indent=2)
+            else:
+                json.dump(commands, f, indent=2)
+        elif output_format == "ast":
+            for obj in commands:
+                f.write(f"{obj}\n")
+
+
+def preview_commands(commands, title="Commands"):
+    """Show a preview of commands with truncation for long ones."""
+    logging.info(f"{title}:")
+    logging.info("=" * 50)
+    
+    # Convert to list if it's an ASTList
+    if hasattr(commands, '__iter__') and not isinstance(commands, (list, tuple)):
+        commands = list(commands)
+    
+    # Show first 5 commands and last 5 commands if there are more than 10
+    if len(commands) <= 10:
+        for i, cmd in enumerate(commands, 1):
+            # Get command text
+            if hasattr(cmd, 'command'):
+                cmd_text = cmd.command
+            else:
+                cmd_text = str(cmd)
+            # Truncate long commands
+            preview_cmd = cmd_text[:100] + "..." if len(cmd_text) > 100 else cmd_text
+            logging.info(f"{i}. {preview_cmd}")
+    else:
+        for i, cmd in enumerate(commands[:5], 1):
+            # Get command text
+            if hasattr(cmd, 'command'):
+                cmd_text = cmd.command
+            else:
+                cmd_text = str(cmd)
+            # Truncate long commands
+            preview_cmd = cmd_text[:100] + "..." if len(cmd_text) > 100 else cmd_text
+            logging.info(f"{i}. {preview_cmd}")
+        logging.info(f"... ({len(commands) - 10} more commands) ...")
+        for i, cmd in enumerate(commands[-5:], len(commands) - 4):
+            # Get command text
+            if hasattr(cmd, 'command'):
+                cmd_text = cmd.command
+            else:
+                cmd_text = str(cmd)
+            # Truncate long commands
+            preview_cmd = cmd_text[:100] + "..." if len(cmd_text) > 100 else cmd_text
+            logging.info(f"{i}. {preview_cmd}")
+    logging.info("=" * 50)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -19,10 +80,10 @@ def main():
     )
     parser.add_argument(
         "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose output (show detailed logs)"
+        action="count",
+        default=0,
+        help="Increase verbosity (-v for INFO, -vv for DEBUG, -vvv for TRACE)"
     )
-
     parser.add_argument(
         "--deploy",
         help="Deploy schema changes to specified file (future: database connection)"
@@ -43,11 +104,6 @@ def main():
         help="Exclude GRANT/REVOKE statements from comparison and migration"
     )
     parser.add_argument(
-        "--use-ast-objects",
-        action="store_true",
-        help="Use ASTObject instances instead of dictionaries (experimental)"
-    )
-    parser.add_argument(
         "--output-format",
         choices=["sql", "json", "ast"],
         default="sql",
@@ -56,9 +112,22 @@ def main():
 
     args = parser.parse_args()
 
-    # Set global verbosity
-    global VERBOSE
-    VERBOSE = args.verbose
+    # Set log level based on verbosity count
+    if args.verbose == 0:
+        log_level = logging.WARNING
+    elif args.verbose == 1:
+        log_level = logging.INFO
+    elif args.verbose == 2:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.DEBUG  # Max verbosity
+    
+    # Configure logging
+    logging.basicConfig(
+        level=log_level,
+        format='%(levelname)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
     # Handle grants flag logic
     grants = False  # Default to excluding grants
@@ -67,187 +136,42 @@ def main():
     elif args.no_grants:
         grants = False  # Explicitly exclude grants
 
-    if args.deploy and args.use_ast_objects:
+    # Get the diff result
+    if args.deploy:
         # Use new ASTList-based alter command generation
         from pg_compose_core.lib.deploy import diff_sort
-        alter_ast_list = diff_sort(
+        result = diff_sort(
             source_a=args.source_a,
             source_b=args.source_b,
             schemas=args.schemas,
             grants=grants
         )
-        
-        # Always write to file when --deploy is specified
-        with open(args.deploy, 'w') as f:
-            if args.output_format == "sql":
-                f.write(alter_ast_list.to_sql())
-            elif args.output_format == "json":
-                import json
-                json.dump(alter_ast_list.to_dict_list(), f, indent=2)
-            elif args.output_format == "ast":
-                # Output ASTObject representations
-                for obj in alter_ast_list:
-                    f.write(f"{obj}\n")
-        
-        if not args.prod:
-            if VERBOSE:
-                print("DRY RUN - Preview of commands that would be deployed:")
-                print("=" * 50)
-                # Show first 5 commands and last 5 commands if there are more than 10
-                if len(alter_ast_list) <= 10:
-                    for i, cmd in enumerate(alter_ast_list, 1):
-                        # Truncate long commands
-                        preview_cmd = cmd.command[:100] + "..." if len(cmd.command) > 100 else cmd.command
-                        print(f"{i}. {preview_cmd}")
-                else:
-                    for i, cmd in enumerate(alter_ast_list[:5], 1):
-                        # Truncate long commands
-                        preview_cmd = cmd.command[:100] + "..." if len(cmd.command) > 100 else cmd.command
-                        print(f"{i}. {preview_cmd}")
-                    print(f"... ({len(alter_ast_list) - 10} more commands) ...")
-                    for i, cmd in enumerate(alter_ast_list[-5:], len(alter_ast_list) - 4):
-                        # Truncate long commands
-                        preview_cmd = cmd.command[:100] + "..." if len(cmd.command) > 100 else cmd.command
-                        print(f"{i}. {preview_cmd}")
-                print("=" * 50)
-            print(f"Total: {len(alter_ast_list)} commands")
-            print(f"Commands written to: {args.deploy} (preview mode)")
-        else:
-            print(f"Deployment commands written to: {args.deploy} (production mode)")
     else:
-        # Use traditional dict-based approach
+        # Use traditional comparison approach
         result = compare_sources(
             args.source_a,
             args.source_b,
             schemas=args.schemas,
-            grants=grants,
-            use_ast_objects=args.use_ast_objects
+            grants=grants
         )
 
-        if args.deploy:
-            if args.use_ast_objects:
-                # result is an ASTList, convert to SQL
-                # Always write to file when --deploy is specified
-                with open(args.deploy, 'w') as f:
-                    if args.output_format == "sql":
-                        f.write(result.to_sql())
-                    elif args.output_format == "json":
-                        import json
-                        json.dump(result.to_dict_list(), f, indent=2)
-                    elif args.output_format == "ast":
-                        for obj in result:
-                            f.write(f"{obj}\n")
-                
-                if not args.prod:
-                    if VERBOSE:
-                        print("DRY RUN - Preview of commands that would be deployed:")
-                        print("=" * 50)
-                        # Show first 5 commands and last 5 commands if there are more than 10
-                        if len(result) <= 10:
-                            for i, obj in enumerate(result, 1):
-                                # Truncate long commands
-                                preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                                print(f"{i}. {preview_cmd}")
-                        else:
-                            for i, obj in enumerate(result[:5], 1):
-                                # Truncate long commands
-                                preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                                print(f"{i}. {preview_cmd}")
-                            print(f"... ({len(result) - 10} more commands) ...")
-                            for i, obj in enumerate(result[-5:], len(result) - 4):
-                                # Truncate long commands
-                                preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                                print(f"{i}. {preview_cmd}")
-                        print("=" * 50)
-                    print(f"Total: {len(result)} commands")
-                    print(f"Commands written to: {args.deploy} (preview mode)")
-                else:
-                    print(f"Deployment commands written to: {args.deploy} (production mode)")
-            else:
-                # Traditional dict-based approach
-                from pg_compose_core.lib.alter_generator import generate_alter_commands
-                alter_commands = generate_alter_commands(result)
-                
-                # Always write to file when --deploy is specified
-                with open(args.deploy, 'w') as f:
-                    f.write('\n'.join(alter_commands))
-                
-                if not args.prod:
-                    if VERBOSE:
-                        print("DRY RUN - Preview of commands that would be deployed:")
-                        print("=" * 50)
-                        # Show first 5 commands and last 5 commands if there are more than 10
-                        if len(alter_commands) <= 10:
-                            for i, cmd in enumerate(alter_commands, 1):
-                                # Truncate long commands
-                                preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                                print(f"{i}. {preview_cmd}")
-                        else:
-                            for i, cmd in enumerate(alter_commands[:5], 1):
-                                # Truncate long commands
-                                preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                                print(f"{i}. {preview_cmd}")
-                            print(f"... ({len(alter_commands) - 10} more commands) ...")
-                            for i, cmd in enumerate(alter_commands[-5:], len(alter_commands) - 4):
-                                # Truncate long commands
-                                preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                                print(f"{i}. {preview_cmd}")
-                        print("=" * 50)
-                    print(f"Total: {len(alter_commands)} commands")
-                    print(f"Commands written to: {args.deploy} (preview mode)")
-                else:
-                    print(f"Deployment commands written to: {args.deploy} (production mode)")
+    # Handle deployment or diff output
+    if args.deploy:
+        # Write to file
+        write_to_file(result, args.deploy, args.output_format)
+        
+        # Show preview if not production
+        if not args.prod:
+            preview_commands(result, "DRY RUN - Preview of commands that would be deployed")
+            logging.info(f"Total: {len(result)} commands")
+            print(f"Commands written to: {args.deploy} (preview mode)")
         else:
-            # Regular diff output (no --deploy specified)
-            if args.use_ast_objects:
-                # result is an ASTList
-                if VERBOSE:
-                    print("Schema differences found:")
-                    print("=" * 50)
-                    # Show first 5 commands and last 5 commands if there are more than 10
-                    if len(result) <= 10:
-                        for i, obj in enumerate(result, 1):
-                            # Truncate long commands
-                            preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                            print(f"{i}. {preview_cmd}")
-                    else:
-                        for i, obj in enumerate(result[:5], 1):
-                            # Truncate long commands
-                            preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                            print(f"{i}. {preview_cmd}")
-                        print(f"... ({len(result) - 10} more commands) ...")
-                        for i, obj in enumerate(result[-5:], len(result) - 4):
-                            # Truncate long commands
-                            preview_cmd = obj.command[:100] + "..." if len(obj.command) > 100 else obj.command
-                            print(f"{i}. {preview_cmd}")
-                    print("=" * 50)
-                print(f"Total: {len(result)} differences found")
-            else:
-                # Traditional dict-based approach
-                from pg_compose_core.lib.alter_generator import generate_alter_commands
-                alter_commands = generate_alter_commands(result)
-                
-                if VERBOSE:
-                    print("Schema differences found:")
-                    print("=" * 50)
-                    # Show first 5 commands and last 5 commands if there are more than 10
-                    if len(alter_commands) <= 10:
-                        for i, cmd in enumerate(alter_commands, 1):
-                            # Truncate long commands
-                            preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                            print(f"{i}. {preview_cmd}")
-                    else:
-                        for i, cmd in enumerate(alter_commands[:5], 1):
-                            # Truncate long commands
-                            preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                            print(f"{i}. {preview_cmd}")
-                        print(f"... ({len(alter_commands) - 10} more commands) ...")
-                        for i, cmd in enumerate(alter_commands[-5:], len(alter_commands) - 4):
-                            # Truncate long commands
-                            preview_cmd = cmd[:100] + "..." if len(cmd) > 100 else cmd
-                            print(f"{i}. {preview_cmd}")
-                    print("=" * 50)
-                print(f"Total: {len(alter_commands)} differences found")
+            print(f"Deployment commands written to: {args.deploy} (production mode)")
+    else:
+        # Show diff output
+        preview_commands(result, "Schema differences found")
+        logging.info(f"Total: {len(result)} differences found")
+
 
 if __name__ == "__main__":
     main()

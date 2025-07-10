@@ -29,17 +29,14 @@ def diff_sort(
     schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=False)
     schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=False)
     
-    # Access global verbosity from CLI module
-    import pg_compose_core.cli.cli as cli_module
-    if cli_module.VERBOSE:
-        print(f"Loaded {len(schema_a)} objects from source A")
-        print(f"Loaded {len(schema_b)} objects from source B")
+    import logging
+    logging.info(f"Loaded {len(schema_a)} objects from source A")
+    logging.info(f"Loaded {len(schema_b)} objects from source B")
     
     # Generate diff as ASTList
     diff_result = diff_schemas(schema_a, schema_b)
     
-    if cli_module.VERBOSE:
-        print(f"Generated {len(diff_result)} alter commands")
+    logging.info(f"Generated {len(diff_result)} alter commands")
     
     # Sort by dependencies and return
     return diff_result.sort()
@@ -80,13 +77,14 @@ def deploy(
         ast_list = ASTList([])  # Placeholder
     
     if verbose:
-        print(f"Deploying to {target}")
+        import logging
+        logging.info(f"Deploying to {target}")
         if isinstance(source, ASTList):
-            print(f"Deploying {len(ast_list)} commands")
+            logging.info(f"Deploying {len(ast_list)} commands")
         else:
-            print(f"Deploying SQL string ({len(sql)} characters)")
+            logging.info(f"Deploying SQL string ({len(sql)} characters)")
         if dry_run:
-            print("DRY RUN - No changes will be applied")
+            logging.info("DRY RUN - No changes will be applied")
     
     if dry_run:
         return {

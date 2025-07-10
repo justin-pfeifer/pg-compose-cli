@@ -97,7 +97,8 @@ def _sort_by_query_hash(queries: List[ASTObject]) -> List[ASTObject]:
 
 def _sort_by_object_names(queries: List[ASTObject], grant_handling: bool = False) -> List[ASTObject]:
     """Sorting logic using object_name as primary key with optional GRANT handling."""
-    print(f"DEBUG _sort_by_object_names input: {len(queries)} queries")
+    import logging
+    logging.debug(f"DEBUG _sort_by_object_names input: {len(queries)} queries")
     
     # Build object_name -> query map
     name_to_query = {}
@@ -105,11 +106,11 @@ def _sort_by_object_names(queries: List[ASTObject], grant_handling: bool = False
         object_name = _get_object_name(q)
         if object_name:
             name_to_query[object_name] = q
-            print(f"DEBUG added to name_to_query: {object_name} -> {q}")
+            logging.debug(f"DEBUG added to name_to_query: {object_name} -> {q}")
         else:
-            print(f"DEBUG skipped object without name: {q}")
+            logging.debug(f"DEBUG skipped object without name: {q}")
     
-    print(f"DEBUG name_to_query has {len(name_to_query)} entries")
+    logging.debug(f"DEBUG name_to_query has {len(name_to_query)} entries")
     
     # Build dependency -> object_name mapping for GRANTs (if enabled)
     dep_to_object = {}
@@ -175,5 +176,5 @@ def _sort_by_object_names(queries: List[ASTObject], grant_handling: bool = False
         if not _get_object_name(q):
             sorted_queries.append(q)
     
-    print(f"DEBUG _sort_by_object_names output: {len(sorted_queries)} queries")
+    logging.debug(f"DEBUG _sort_by_object_names output: {len(sorted_queries)} queries")
     return sorted_queries
