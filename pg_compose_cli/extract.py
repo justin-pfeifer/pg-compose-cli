@@ -1,27 +1,8 @@
 import hashlib
 import re
 from pglast import parse_sql
-from typing import Literal
-
-BuildStage = Literal[
-    "extension",
-    "schema",
-    "enum",
-    "domain",
-    "composite_type",
-    "base_table",
-    "sequence",
-    "dependent_table",
-    "index",
-    "constraint",
-    "view",
-    "materialized_view",
-    "function",
-    "trigger",
-    "policy",
-    "grant",
-    "unknown"
-]
+from typing import List, Union
+from .ast_objects import ASTObject, BuildStage, ASTList
 
 POSTGRES_BUILTINS = {
     "text", "varchar", "char", "int", "int4", "int8", "integer", "bigint", "smallint",
@@ -47,7 +28,7 @@ def normalize_sql(sql: str) -> str:
     
     return sql
 
-def extract_build_queries(sql: str) -> list[dict]:
+def extract_build_queries(sql: str, use_ast_objects: bool = True) -> Union[ASTList, List[dict]]:
     results = []
     
     try:
@@ -127,6 +108,40 @@ def extract_build_queries(sql: str) -> list[dict]:
                 if pktable:
                     dependencies.append(pktable.relname.lower())
 
+            # Extract SQL slice and create normalized hash
+            start = raw_stmt.stmt_location
+            end = start + raw_stmt.stmt_len
+            query_text = sql[start:end]
+            normalized_sql = normalize_sql(query_text)
+            query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
+
+            # Clean up dependency list
+            filtered_deps = [
+                d for d in dependencies
+                if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
+            ]
+
+            if use_ast_objects:
+                results.append(ASTObject(
+                    command=query_text,
+                    object_name=object_name,
+                    query_type=BuildStage(query_type),
+                    dependencies=sorted(set(filtered_deps)),
+                    query_start_pos=start,
+                    query_end_pos=end,
+                    ast_node=node
+                ))
+            else:
+                results.append({
+                    "query_type": query_type,
+                    "object_name": object_name,
+                    "query_start_pos": start,
+                    "query_end_pos": end,
+                    "query_hash": query_hash,
+                    "query_text": query_text,
+                    "dependencies": sorted(set(filtered_deps))
+                })
+
         elif typename == "CreateSeqStmt":
             query_type = "sequence"
             rel = getattr(node, "sequence", None)
@@ -175,6 +190,40 @@ def extract_build_queries(sql: str) -> list[dict]:
                     relname = getattr(clause, "relname", None)
                     if relname:
                         dependencies.append(relname.lower())
+
+            # Extract SQL slice and create normalized hash
+            start = raw_stmt.stmt_location
+            end = start + raw_stmt.stmt_len
+            query_text = sql[start:end]
+            normalized_sql = normalize_sql(query_text)
+            query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
+
+            # Clean up dependency list
+            filtered_deps = [
+                d for d in dependencies
+                if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
+            ]
+
+            if use_ast_objects:
+                results.append(ASTObject(
+                    command=query_text,
+                    object_name=object_name,
+                    query_type=BuildStage(query_type),
+                    dependencies=sorted(set(filtered_deps)),
+                    query_start_pos=start,
+                    query_end_pos=end,
+                    ast_node=node
+                ))
+            else:
+                results.append({
+                    "query_type": query_type,
+                    "object_name": object_name,
+                    "query_start_pos": start,
+                    "query_end_pos": end,
+                    "query_hash": query_hash,
+                    "query_text": query_text,
+                    "dependencies": sorted(set(filtered_deps))
+                })
 
         elif typename in ("CreateFunctionStmt", "CreateProcedureStmt"):
             query_type = "function"
@@ -247,15 +296,27 @@ def extract_build_queries(sql: str) -> list[dict]:
                     d for d in dependencies
                     if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
                 ]
-                results.append({
-                    "query_type": query_type,
-                    "object_name": object_name,
-                    "query_start_pos": start,
-                    "query_end_pos": end,
-                    "query_hash": query_hash,
-                    "query_text": query_text,
-                    "dependencies": sorted(set(filtered_deps))
-                })
+                
+                if use_ast_objects:
+                    results.append(ASTObject(
+                        command=query_text,
+                        object_name=object_name,
+                        query_type=BuildStage(query_type),
+                        dependencies=sorted(set(filtered_deps)),
+                        query_start_pos=start,
+                        query_end_pos=end,
+                        ast_node=node
+                    ))
+                else:
+                    results.append({
+                        "query_type": query_type,
+                        "object_name": object_name,
+                        "query_start_pos": start,
+                        "query_end_pos": end,
+                        "query_hash": query_hash,
+                        "query_text": query_text,
+                        "dependencies": sorted(set(filtered_deps))
+                    })
 
         else:
             # Handle all other statement types
@@ -272,14 +333,27 @@ def extract_build_queries(sql: str) -> list[dict]:
                 if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
             ]
 
-            results.append({
-                "query_type": query_type,
-                "object_name": object_name,
-                "query_start_pos": start,
-                "query_end_pos": end,
-                "query_hash": query_hash,
-                "query_text": query_text,
-                "dependencies": sorted(set(filtered_deps))
-            })
+            if use_ast_objects:
+                results.append(ASTObject(
+                    command=query_text,
+                    object_name=object_name,
+                    query_type=BuildStage(query_type),
+                    dependencies=sorted(set(filtered_deps)),
+                    query_start_pos=start,
+                    query_end_pos=end,
+                    ast_node=node
+                ))
+            else:
+                results.append({
+                    "query_type": query_type,
+                    "object_name": object_name,
+                    "query_start_pos": start,
+                    "query_end_pos": end,
+                    "query_hash": query_hash,
+                    "query_text": query_text,
+                    "dependencies": sorted(set(filtered_deps))
+                })
 
+    if use_ast_objects:
+        return ASTList(results)
     return results

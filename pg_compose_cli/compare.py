@@ -1,15 +1,19 @@
 from pg_compose_cli.extract import extract_build_queries
 from pg_compose_cli.diff import diff_schemas
 from pg_compose_cli.pgdump import extract_from_postgres
+from pg_compose_cli.ast_objects import ASTList, BuildStage
 import json
 import os
-from typing import Optional, List
+from typing import Optional, List, Union
 
 
-def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool = True) -> list[dict]:
+def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool = True, use_ast_objects: bool = True) -> Union[List[dict], ASTList]:
     """Load schema objects from a file, connection string, directory, or raw SQL string."""
     if source.startswith("postgres://"):
-        return extract_from_postgres(source, schemas=schemas)
+        objs = extract_from_postgres(source, schemas=schemas)
+        if use_ast_objects:
+            return ASTList.from_dict_list(objs)
+        return objs
 
     # Handle git URLs
     if source.startswith("git://") or source.startswith("git@") or source.startswith("https://github.com/"):
@@ -45,12 +49,10 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
                         base_url = source[:git_index + 4]  # Include .git
                         target_path = source[git_index + 5:]  # Skip the / after .git
                         source = base_url
-                else:
-                    # Handle case where .git is not in URL at all
-                    parts = source.split("/", 3)  # Split into max 4 parts
-                    if len(parts) >= 4:
-                        source = "/".join(parts[:3])  # First 3 parts are the repo URL
-                        target_path = "/".join(parts[3:])  # Rest is the target directory
+                parts = source.split("/", 3)  # Split into max 4 parts
+                if len(parts) >= 4:
+                    source = "/".join(parts[:3])  # First 3 parts are the repo URL
+                    target_path = "/".join(parts[3:])  # Rest is the target directory
         # If we parsed a branch, append it to the repo URL
         if branch:
             source = f"{source}#{branch}"
@@ -61,7 +63,7 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
             if os.path.isfile(working_dir):
                 # It's a single file, read it directly
                 with open(working_dir, "r", encoding="utf-8") as f:
-                    objs = extract_build_queries(f.read())
+                    objs = extract_build_queries(f.read(), use_ast_objects=use_ast_objects)
             else:
                 # It's a directory, merge all SQL files
                 from pg_compose_cli.merge import merge_sql
@@ -70,29 +72,39 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
                 # Create a temporary directory for the merged file
                 with tempfile.TemporaryDirectory() as temp_dir:
                     # Merge all SQL files in the working directory (no subdirectory filter)
-                    merge_sql(working_dir, temp_dir)
-                    
-                    # Read the merged file
-                    sorted_path = os.path.join(temp_dir, "sorted.sql")
-                    if os.path.exists(sorted_path):
-                        with open(sorted_path, "r", encoding="utf-8") as f:
-                            objs = extract_build_queries(f.read())
+                    ast_list = merge_sql(working_dir, temp_dir)
+                    if use_ast_objects:
+                        objs = ast_list
                     else:
-                        # If no SQL files found, return empty list
-                        objs = []
+                        objs = ast_list.to_dict_list()
+            
             if not grants:
-                objs = [o for o in objs if o.get("query_type") != "grant"]
+                if use_ast_objects:
+                    objs = ASTList([o for o in objs if o.query_type.value != "grant"])
+                else:
+                    objs = [o for o in objs if o.get("query_type") != "grant"]
+            # Wrap in ASTList if using ASTObjects and not already an ASTList
+            if use_ast_objects and not isinstance(objs, ASTList):
+                objs = ASTList(objs)
             return objs
 
     if os.path.isfile(source):
         if source.endswith(".sql"):
             with open(source, "r", encoding="utf-8") as f:
-                objs = extract_build_queries(f.read())
+                objs = extract_build_queries(f.read(), use_ast_objects=use_ast_objects)
         elif source.endswith(".json"):
             with open(source, "r", encoding="utf-8") as f:
                 objs = json.load(f)
+                if use_ast_objects:
+                    objs = ASTList.from_dict_list(objs)
         if not grants:
-            objs = [o for o in objs if o.get("query_type") != "grant"]
+            if use_ast_objects:
+                objs = ASTList([o for o in objs if o.query_type.value != "grant"])
+            else:
+                objs = [o for o in objs if o.get("query_type") != "grant"]
+        # Wrap in ASTList if using ASTObjects and not already an ASTList
+        if use_ast_objects and not isinstance(objs, ASTList):
+            objs = ASTList(objs)
         return objs
     elif os.path.isdir(source):
         # Handle directory by merging all SQL files
@@ -102,24 +114,31 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
         # Create a temporary directory for the merged file
         with tempfile.TemporaryDirectory() as temp_dir:
             # Merge all SQL files in the directory (no subdirectory filter)
-            merge_sql(source, temp_dir)
-            
-            # Read the merged file
-            sorted_path = os.path.join(temp_dir, "sorted.sql")
-            if os.path.exists(sorted_path):
-                with open(sorted_path, "r", encoding="utf-8") as f:
-                    objs = extract_build_queries(f.read())
+            ast_list = merge_sql(source, temp_dir)
+            if use_ast_objects:
+                objs = ast_list
             else:
-                # If no SQL files found, return empty list
-                objs = []
+                objs = ast_list.to_dict_list()
         if not grants:
-            objs = [o for o in objs if o.get("query_type") != "grant"]
+            if use_ast_objects:
+                objs = ASTList([o for o in objs if o.query_type.value != "grant"])
+            else:
+                objs = [o for o in objs if o.get("query_type") != "grant"]
+        # Wrap in ASTList if using ASTObjects and not already an ASTList
+        if use_ast_objects and not isinstance(objs, ASTList):
+            objs = ASTList(objs)
         return objs
 
     # Assume raw SQL string
-    objs = extract_build_queries(source)
+    objs = extract_build_queries(source, use_ast_objects=use_ast_objects)
     if not grants:
-        objs = [o for o in objs if o.get("query_type") != "grant"]
+        if use_ast_objects:
+            objs = ASTList([o for o in objs if o.query_type.value != "grant"])
+        else:
+            objs = [o for o in objs if o.get("query_type") != "grant"]
+    # Wrap in ASTList if using ASTObjects and not already an ASTList
+    if use_ast_objects and not isinstance(objs, ASTList):
+        objs = ASTList(objs)
     return objs
 
 
@@ -129,48 +148,40 @@ def compare_sources(
     *,
     schemas: Optional[List[str]] = None,
     verbose: bool = True,
-    grants: bool = True
-) -> dict:
-    """Compare two schema sources: .sql, .json, raw SQL, or postgres:// URIs."""
+    grants: bool = True,
+    use_ast_objects: bool = True
+) -> Union[dict, 'ASTList']:
+    """Compare two schema sources and return diff result or ASTList of alter commands."""
     
-    schema_a = load_source(source_a, schemas=schemas, grants=grants)
-    schema_b = load_source(source_b, schemas=schemas, grants=grants)
+    schema_a = load_source(source_a, schemas=schemas, grants=grants, use_ast_objects=use_ast_objects)
+    schema_b = load_source(source_b, schemas=schemas, grants=grants, use_ast_objects=use_ast_objects)
 
-    result = diff_schemas(schema_a, schema_b)
+    # Convert to dict format for diff_schemas if needed
+    if use_ast_objects:
+        schema_a_dict = schema_a.to_dict_list()
+        schema_b_dict = schema_b.to_dict_list()
+    else:
+        schema_a_dict = schema_a
+        schema_b_dict = schema_b
+
+    result = diff_schemas(schema_a_dict, schema_b_dict)
 
     if verbose:
         print("\nSchema Diff Results\n" + "=" * 40)
-        for obj in result["created"]:
-            print(f"[CREATE] {obj['query_type']} {obj['object_name']}")
-        for obj in result["dropped"]:
-            print(f"[DROP]   {obj['query_type']} {obj['object_name']}")
-        for obj in result["changed"]:
-            print(f"[CHANGE] {obj['query_type']} {obj['object_name']}")
-            if obj.get("ast_diff"):
-                print("         - AST diff:")
-                ast_diff = obj["ast_diff"]
-                
-                # Handle table changes
-                for col in ast_diff.get("add_columns", []):
-                    print(f"            + column: {col}")
-                for col in ast_diff.get("drop_columns", []):
-                    print(f"            - column: {col}")
-                for col in ast_diff.get("change_columns", []):
-                    print(f"            ~ column: {col['column']}")
-                    if col.get("type"):
-                        print(f"              type: {col['type']['from']} → {col['type']['to']}")
-                    if col.get("nullable"):
-                        print(f"              nullable: {col['nullable']['from']} → {col['nullable']['to']}")
-                    if col.get("default"):
-                        print(f"              default: {col['default']['from']} → {col['default']['to']}")
-                
-                # Handle other changes
-                if ast_diff.get("query_changed"):
-                    print("            ~ query changed")
-                if ast_diff.get("function_changed"):
-                    print("            ~ function changed")
-                if ast_diff.get("ast_changed"):
-                    print("            ~ AST structure changed")
+        # Filter commands by type for display
+        create_cmds = [obj for obj in result if obj.command.strip().upper().startswith("CREATE")]
+        drop_cmds = [obj for obj in result if obj.command.strip().upper().startswith("DROP")]
+        alter_cmds = [obj for obj in result if obj.command.strip().upper().startswith("ALTER")]
+        
+        for obj in create_cmds:
+            print(f"[CREATE] {obj.query_type.value} {obj.object_name}")
+        for obj in drop_cmds:
+            print(f"[DROP]   {obj.query_type.value} {obj.object_name}")
+        for obj in alter_cmds:
+            print(f"[ALTER]  {obj.query_type.value} {obj.object_name}")
         print("=" * 40)
 
     return result
+
+
+
