@@ -366,14 +366,8 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
     """Load schema objects from a source (file, directory, or connection string)."""
     import os
     
-    # Handle .sql files
-    if source.endswith('.sql'):
-        with open(source, 'r') as f:
-            sql = f.read()
-        return parse_sql_to_ast_objects(sql, grants=grants)
-    
-    # Handle git repositories
-    elif source.startswith(('git@', 'https://')) and ('.git' in source):
+    # Handle git repositories first (before .sql files to avoid conflicts)
+    if source.startswith(('git@', 'https://')) and ('.git' in source):
         from pg_compose_core.lib.git import extract_from_git_repo
         
         # Parse the source to separate repo URL from target path
@@ -390,21 +384,37 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
             target_path = parts[1]
         
         with extract_from_git_repo(repo_url, target_path) as working_dir:
-            # Load all .sql files in the directory
-            all_sql = []
-            for root, dirs, files in os.walk(working_dir):
-                for file in files:
-                    if file.endswith('.sql'):
-                        file_path = os.path.join(root, file)
-                        with open(file_path, 'r') as f:
-                            all_sql.append(f.read())
-            
-            if not all_sql:
-                raise ValueError(f"No .sql files found in git repository: {source}")
-            
-            # Parse all SQL files
-            combined_sql = '\n\n'.join(all_sql)
-            return parse_sql_to_ast_objects(combined_sql, grants=grants)
+            # If target_path points to a specific .sql file, load just that file
+            if target_path and target_path.endswith('.sql'):
+                # For files, the working_dir is the repository root, so we need to join with target_path
+                file_path = os.path.join(working_dir, target_path)
+                if not os.path.exists(file_path):
+                    raise ValueError(f"File '{target_path}' not found in git repository: {source}")
+                with open(file_path, 'r') as f:
+                    sql = f.read()
+                return parse_sql_to_ast_objects(sql, grants=grants)
+            else:
+                # Load all .sql files in the directory
+                all_sql = []
+                for root, dirs, files in os.walk(working_dir):
+                    for file in files:
+                        if file.endswith('.sql'):
+                            file_path = os.path.join(root, file)
+                            with open(file_path, 'r') as f:
+                                all_sql.append(f.read())
+                
+                if not all_sql:
+                    raise ValueError(f"No .sql files found in git repository: {source}")
+                
+                # Parse all SQL files
+                combined_sql = '\n\n'.join(all_sql)
+                return parse_sql_to_ast_objects(combined_sql, grants=grants)
+    
+    # Handle .sql files
+    elif source.endswith('.sql'):
+        with open(source, 'r') as f:
+            sql = f.read()
+        return parse_sql_to_ast_objects(sql, grants=grants)
     
     # Handle postgres:// URIs
     elif source.startswith('postgres://') or source.startswith('postgresql://'):

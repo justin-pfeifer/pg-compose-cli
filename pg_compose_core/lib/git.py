@@ -73,17 +73,18 @@ class GitRepoContext:
             except subprocess.CalledProcessError as e:
                 raise ValueError(f"Failed to checkout commit {ref}: {e.stderr}")
         
-        # Determine working directory based on target_path
+        # Always return the repository root as working directory
+        # The target_path will be used by the caller to construct the full path
         self.working_dir = self.tmp_dir
+        
+        # Check if the target_path exists in the repository
         if self.target_path:
-            self.working_dir = os.path.join(self.tmp_dir, self.target_path)
-            # Check if the path exists in the repository
-        if not os.path.exists(self.working_dir):
+            target_full_path = os.path.join(self.tmp_dir, self.target_path)
+            if not os.path.exists(target_full_path):
                 # If it's a directory path (doesn't end with .sql), it should exist
                 if not self.target_path.endswith('.sql'):
                     raise ValueError(f"Directory path '{self.target_path}' does not exist in repository")
                 # If it's a .sql file that doesn't exist, that's fine - it will be treated as new
-                # Note: The working_dir will be the parent directory for file comparison
         
         return self.working_dir
     
