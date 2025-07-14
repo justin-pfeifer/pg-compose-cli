@@ -75,6 +75,12 @@ def parse_sql_to_ast_objects(sql: str, grants: bool = True) -> ASTList:
         # Extract SQL slice and create normalized hash
         start = raw_stmt.stmt_location
         end = start + raw_stmt.stmt_len
+        
+        # Fix for pglast not including trailing semicolon
+        # If the statement doesn't end with ';' but the next character is ';', include it
+        if end < len(sql) and sql[end] == ';':
+            end += 1
+        
         query_text = sql[start:end]
         normalized_sql = normalize_sql(query_text)
         query_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
