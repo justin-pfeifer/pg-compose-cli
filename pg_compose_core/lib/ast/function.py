@@ -28,7 +28,9 @@ class FunctionASTObject(ASTObject):
     signature_hash: Optional[str] = None
 
     def __post_init__(self):
-        self.query_type = BuildStage.FUNCTION
+        # Only set query_type to FUNCTION if it's not already set (for procedures)
+        if self.query_type == BuildStage.UNKNOWN:
+            self.query_type = BuildStage.FUNCTION
         super().__post_init__()
         if self.signature_hash is None:
             self.signature_hash = self._generate_signature_hash()
@@ -41,7 +43,8 @@ class FunctionASTObject(ASTObject):
             if param.mode:
                 param_str = f"{param.mode} {param_str}"
             signature_parts.append(param_str)
-        if self.return_type:
+        # Only include return type for functions, not procedures
+        if self.return_type and self.query_type == BuildStage.FUNCTION:
             signature_parts.append(f"RETURNS {self.return_type}")
         if self.language:
             signature_parts.append(f"LANGUAGE {self.language}")
@@ -53,16 +56,21 @@ class FunctionASTObject(ASTObject):
 
     def get_signature_sql(self) -> str:
         parts = []
-        func_name = self.qualified_name
+        obj_name = self.qualified_name
         param_strs = []
         for param in self.parameters:
             param_str = f"{param.name} {param.data_type}"
             if param.mode:
                 param_str = f"{param.mode} {param_str}"
             param_strs.append(param_str)
-        parts.append(f"CREATE OR REPLACE FUNCTION {func_name}({', '.join(param_strs)})")
-        if self.return_type:
-            parts.append(f"RETURNS {self.return_type}")
+        
+        if self.query_type == BuildStage.PROCEDURE:
+            parts.append(f"CREATE OR REPLACE PROCEDURE {obj_name}({', '.join(param_strs)})")
+        else:
+            parts.append(f"CREATE OR REPLACE FUNCTION {obj_name}({', '.join(param_strs)})")
+            if self.return_type:
+                parts.append(f"RETURNS {self.return_type}")
+        
         return " ".join(parts)
 
     def to_dict(self) -> Dict[str, Any]:

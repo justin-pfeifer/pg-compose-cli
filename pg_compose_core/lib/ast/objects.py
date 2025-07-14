@@ -19,6 +19,7 @@ class BuildStage(Enum):
     VIEW = "view"
     MATERIALIZED_VIEW = "materialized_view"
     FUNCTION = "function"
+    PROCEDURE = "procedure"
     TRIGGER = "trigger"
     POLICY = "policy"
     GRANT = "grant"

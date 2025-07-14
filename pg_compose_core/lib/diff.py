@@ -65,6 +65,13 @@ def _generate_drop_command(obj: ASTObject) -> ASTObject:
             command = f"DROP FUNCTION {object_name}({', '.join(param_strs)});"
         else:
             command = f"DROP FUNCTION {object_name};"
+    elif obj.query_type == BuildStage.PROCEDURE:
+        if isinstance(obj, FunctionASTObject) and obj.parameters:
+            # Include parameter types in DROP for procedure overloading
+            param_strs = [f"{param.data_type}" for param in obj.parameters]
+            command = f"DROP PROCEDURE {object_name}({', '.join(param_strs)});"
+        else:
+            command = f"DROP PROCEDURE {object_name};"
     elif obj.query_type == BuildStage.INDEX:
         command = f"DROP INDEX {object_name};"
     elif obj.query_type == BuildStage.CONSTRAINT:
@@ -123,6 +130,25 @@ def _generate_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> List[AST
                 commands.append(new_obj)
         else:
             # Fallback for non-FunctionASTObject functions
+            drop_cmd = _generate_drop_command(old_obj)
+            if drop_cmd:
+                commands.append(drop_cmd)
+            commands.append(new_obj)
+    
+    elif old_obj.query_type == BuildStage.PROCEDURE:
+        # For procedures, check if signature changed
+        if isinstance(old_obj, FunctionASTObject) and isinstance(new_obj, FunctionASTObject):
+            if old_obj.signature_matches(new_obj):
+                # Same signature, body-only change - use CREATE OR REPLACE
+                commands.append(new_obj)
+            else:
+                # Signature changed - need DROP + CREATE
+                drop_cmd = _generate_drop_command(old_obj)
+                if drop_cmd:
+                    commands.append(drop_cmd)
+                commands.append(new_obj)
+        else:
+            # Fallback for non-FunctionASTObject procedures
             drop_cmd = _generate_drop_command(old_obj)
             if drop_cmd:
                 commands.append(drop_cmd)

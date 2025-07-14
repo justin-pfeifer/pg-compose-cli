@@ -110,9 +110,16 @@ def parse_sql_to_ast_objects(sql: str, grants: bool = True) -> ASTList:
                 ast_objects.append(ast_obj)
         
         elif typename == "CreateFunctionStmt":
-            ast_obj = _parse_function_statement(node, query_text, query_hash, start, end)
+            # Check if this is actually a procedure
+            is_procedure = getattr(node, "is_procedure", False)
+            if is_procedure:
+                ast_obj = _parse_procedure_statement(node, query_text, query_hash, start, end)
+            else:
+                ast_obj = _parse_function_statement(node, query_text, query_hash, start, end)
             if ast_obj:
                 ast_objects.append(ast_obj)
+        
+
         
         # Add more statement types as needed...
     
@@ -415,6 +422,20 @@ def _parse_function_statement(node, query_text: str, query_hash: str, start: int
             param_default = getattr(param, "defexpr", None)
             
             if param_name and param_type:
+                # Skip table columns (parameters with mode 't' are TABLE return columns)
+                if param_mode is not None:
+                    mode_value = None
+                    if hasattr(param_mode, 'value'):
+                        mode_value = param_mode.value
+                    elif hasattr(param_mode, 'name'):
+                        mode_value = param_mode.name
+                    else:
+                        mode_value = str(param_mode)
+                    
+                    # Skip table columns (mode 't')
+                    if mode_value == 't':
+                        continue
+                
                 # Extract full type information including precision/scale
                 type_name = _extract_full_type_name(param_type)
                 
@@ -513,6 +534,141 @@ def _parse_function_statement(node, query_text: str, query_hash: str, start: int
         is_leakproof=is_leakproof,
         parallel=parallel,
         function_body=func_body
+    )
+
+def _parse_procedure_statement(node, query_text: str, query_hash: str, start: int, end: int) -> Optional[ASTObject]:
+    """Parse CREATE PROCEDURE statements."""
+    proc_name = None
+    schema = None
+    
+    # Extract procedure name and schema
+    if hasattr(node, "funcname") and node.funcname:
+        if len(node.funcname) > 1:
+            # Procedure has schema qualification
+            schema = str(node.funcname[0].sval).lower()
+            proc_name = str(node.funcname[-1].sval).lower()
+        else:
+            # Procedure without schema (uses search_path)
+            proc_name = str(node.funcname[0].sval).lower()
+    
+    if not proc_name:
+        return None
+    
+    # Extract procedure parameters (same as functions)
+    parameters = []
+    if hasattr(node, "parameters") and node.parameters:
+        for param in node.parameters:
+            param_name = getattr(param, "name", None)
+            param_type = getattr(param, "argType", None)
+            param_mode = getattr(param, "mode", None)
+            param_default = getattr(param, "defexpr", None)
+            
+            if param_name and param_type:
+                # Skip table columns (parameters with mode 't' are TABLE return columns)
+                if param_mode is not None:
+                    mode_value = None
+                    if hasattr(param_mode, 'value'):
+                        mode_value = param_mode.value
+                    elif hasattr(param_mode, 'name'):
+                        mode_value = param_mode.name
+                    else:
+                        mode_value = str(param_mode)
+                    
+                    # Skip table columns (mode 't')
+                    if mode_value == 't':
+                        continue
+                
+                # Extract full type information including precision/scale
+                type_name = _extract_full_type_name(param_type)
+                
+                # Convert parameter mode to string representation
+                mode_str = None
+                if param_mode is not None:
+                    if hasattr(param_mode, 'value'):
+                        mode_value = param_mode.value
+                        if mode_value != 'd':
+                            mode_str = mode_value
+                    elif hasattr(param_mode, 'name'):
+                        mode_str = param_mode.name
+                    else:
+                        mode_str = str(param_mode)
+                
+                parameters.append(FunctionParameter(
+                    name=str(param_name),
+                    data_type=type_name,
+                    mode=mode_str,
+                    default_value=str(param_default) if param_default else None
+                ))
+    
+    # Extract procedure options (language, volatility, etc.)
+    language = None
+    volatility = None
+    security = None
+    is_aggregate = False
+    is_window = False
+    is_leakproof = False
+    parallel = None
+    
+    if hasattr(node, "options") and node.options:
+        for option in node.options:
+            if hasattr(option, "defname"):
+                option_name = option.defname
+                option_value = getattr(option, "arg", None)
+                
+                if option_name == "language":
+                    language = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "volatility":
+                    volatility = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "security":
+                    security = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "parallel":
+                    parallel = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "leakproof":
+                    is_leakproof = True
+                elif option_name == "aggregate":
+                    is_aggregate = True
+                elif option_name == "window":
+                    is_window = True
+    
+    # Extract dependencies from procedure body
+    dependencies = []
+    
+    # Get procedure body
+    proc_body = None
+    if hasattr(node, "options") and node.options:
+        for option in node.options:
+            if hasattr(option, "defname") and option.defname == "as":
+                if hasattr(option, "arg") and option.arg:
+                    if hasattr(option.arg, "sval"):
+                        proc_body = option.arg.sval
+                    elif isinstance(option.arg, list):
+                        # Handle list of strings (multi-line procedure body)
+                        proc_body = " ".join(str(arg.sval) for arg in option.arg if hasattr(arg, "sval"))
+    
+    # Extract table dependencies from procedure body using proper SQL parsing
+    if proc_body:
+        dependencies = _extract_function_dependencies_with_parser(proc_body)
+    
+    return FunctionASTObject(
+        command=query_text,
+        object_name=proc_name,
+        dependencies=dependencies,
+        query_hash=query_hash,
+        query_start_pos=start,
+        query_end_pos=end,
+        schema=schema,
+        ast_node=node,
+        parameters=parameters,
+        return_type=None,  # Procedures don't have return types
+        language=language,
+        volatility=volatility,
+        security=security,
+        is_aggregate=is_aggregate,
+        is_window=is_window,
+        is_leakproof=is_leakproof,
+        parallel=parallel,
+        function_body=proc_body,
+        query_type=BuildStage.PROCEDURE  # Override the default FUNCTION type
     )
 
 def _extract_function_dependencies_with_parser(func_body: str) -> List[str]:
