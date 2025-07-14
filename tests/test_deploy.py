@@ -2,7 +2,7 @@ import pytest
 import tempfile
 import os
 from pg_compose_core.lib.deploy import diff_sort, deploy
-from pg_compose_core.lib.ast_list import ASTList
+from pg_compose_core.lib.ast import ASTList
 
 
 class TestDeploy:

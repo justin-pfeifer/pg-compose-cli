@@ -5,7 +5,7 @@ Schema comparison endpoints.
 from fastapi import APIRouter, HTTPException, Form
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pg_compose_core.lib.compare import compare_sources
-from pg_compose_core.lib.ast_objects import ASTList
+from pg_compose_core.lib.ast import ASTList
 
 router = APIRouter()
 

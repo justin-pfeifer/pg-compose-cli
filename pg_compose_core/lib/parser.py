@@ -6,9 +6,11 @@ Consolidates all parsing logic from extract.py, catalog.py, compare.py, and diff
 import hashlib
 import re
 from typing import List, Optional, Union, Dict, Any
-from pglast import parse_sql
-from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
-from pg_compose_core.lib.ast_list import ASTList
+from pglast import parse_sql, parse_plpgsql
+from pg_compose_core.lib.ast.objects import ASTObject, BuildStage, ResourceType
+from pg_compose_core.lib.ast.function import FunctionASTObject, FunctionParameter
+from pg_compose_core.lib.ast.table import TableASTObject, TableColumn, TableConstraint
+from pg_compose_core.lib.ast.list import ASTList
 
 # Constants
 POSTGRES_BUILTINS = {
@@ -57,7 +59,12 @@ def parse_sql_to_ast_objects(sql: str, grants: bool = True) -> ASTList:
     try:
         raw_stmts = parse_sql(sql)
     except Exception as e:
-        raise ValueError(f"Failed to parse SQL: {str(e)}")
+        # Try parse_plpgsql as fallback
+        try:
+            raw_stmts = parse_plpgsql(sql)
+        except Exception as plpgsql_e:
+            # If both fail, rethrow the original exception
+            raise ValueError(f"Failed to parse SQL: {str(e)}")
     
     ast_objects = []
     
@@ -140,6 +147,58 @@ def _parse_create_statement(node, query_text: str, query_hash: str, start: int, 
                             dep_name = f"{pk_schema}.{pk_table}" if pk_schema else pk_table
                             dependencies.append(dep_name)
     
+    # For tables, create TableASTObject with column and constraint information
+    if query_type == BuildStage.BASE_TABLE:
+        columns = []
+        constraints = []
+        
+        if hasattr(node, "tableElts") and node.tableElts:
+            for elt in node.tableElts:
+                if hasattr(elt, "colname") and hasattr(elt, "typeName"):
+                    # This is a column definition
+                    col_name = str(elt.colname)
+                    col_type = _extract_full_type_name(elt.typeName)
+                    is_nullable = not getattr(elt, "is_not_null", False)
+                    default = None
+                    
+                    # Check for default value
+                    if hasattr(elt, "raw_default") and elt.raw_default:
+                        default = str(elt.raw_default)
+                    
+                    columns.append(TableColumn(
+                        name=col_name,
+                        data_type=col_type,
+                        is_nullable=is_nullable,
+                        default=default
+                    ))
+                
+                elif hasattr(elt, "constraint") and elt.constraint:
+                    # This is a table-level constraint
+                    constraint = elt.constraint
+                    constraint_name = getattr(constraint, "conname", None)
+                    constraint_type = _get_constraint_type(constraint)
+                    constraint_columns = _extract_constraint_columns(constraint)
+                    
+                    constraints.append(TableConstraint(
+                        name=constraint_name,
+                        constraint_type=constraint_type,
+                        columns=constraint_columns
+                    ))
+        
+        return TableASTObject(
+            command=query_text,
+            object_name=table_name,
+            dependencies=dependencies,
+            query_hash=query_hash,
+            query_start_pos=start,
+            query_end_pos=end,
+            schema=schema,
+            ast_node=node,
+            columns=columns,
+            constraints=constraints
+        )
+    
+    # For non-table objects, return regular ASTObject
     return ASTObject(
         command=query_text,
         object_name=table_name,
@@ -237,7 +296,7 @@ def _parse_policy_statement(node, query_text: str, query_hash: str, start: int, 
 
 def _parse_grant_statement(node, query_text: str, query_hash: str, start: int, end: int) -> List[ASTObject]:
     """Parse GRANT statements."""
-    from pg_compose_core.lib.ast_objects import ResourceType
+    from pg_compose_core.lib.ast import ResourceType
     
     ast_objects = []
     objs = getattr(node, "objects", []) or []
@@ -329,28 +388,319 @@ def _parse_view_statement(node, query_text: str, query_hash: str, start: int, en
     )
 
 def _parse_function_statement(node, query_text: str, query_hash: str, start: int, end: int) -> Optional[ASTObject]:
-    """Parse CREATE FUNCTION statements."""
+    """Parse CREATE FUNCTION statements including PL/pgSQL functions."""
     func_name = None
+    schema = None
+    
+    # Extract function name and schema
     if hasattr(node, "funcname") and node.funcname:
         if len(node.funcname) > 1:
+            # Function has schema qualification
+            schema = str(node.funcname[0].sval).lower()
             func_name = str(node.funcname[-1].sval).lower()
         else:
+            # Function without schema (uses search_path)
             func_name = str(node.funcname[0].sval).lower()
     
     if not func_name:
         return None
     
-    return ASTObject(
+    # Extract function parameters
+    parameters = []
+    if hasattr(node, "parameters") and node.parameters:
+        for param in node.parameters:
+            param_name = getattr(param, "name", None)
+            param_type = getattr(param, "argType", None)
+            param_mode = getattr(param, "mode", None)
+            param_default = getattr(param, "defexpr", None)
+            
+            if param_name and param_type:
+                # Extract full type information including precision/scale
+                type_name = _extract_full_type_name(param_type)
+                
+                # Convert parameter mode to string representation
+                mode_str = None
+                if param_mode is not None:
+                    # param_mode is an enum, get the value (e.g., 'd' for default, 'i' for in, etc.)
+                    if hasattr(param_mode, 'value'):
+                        mode_value = param_mode.value
+                        # Only include mode if it's not the default ('d')
+                        if mode_value != 'd':
+                            mode_str = mode_value
+                    elif hasattr(param_mode, 'name'):
+                        # Fallback to name if value not available
+                        mode_str = param_mode.name
+                    else:
+                        mode_str = str(param_mode)
+                
+                parameters.append(FunctionParameter(
+                    name=str(param_name),  # param_name is already a string
+                    data_type=type_name,
+                    mode=mode_str,
+                    default_value=str(param_default) if param_default else None
+                ))
+    
+    # Extract return type
+    return_type = None
+    if hasattr(node, "returnType") and node.returnType:
+        return_type = _extract_full_type_name(node.returnType)
+    
+    # Extract function options (language, volatility, etc.)
+    language = None
+    volatility = None
+    security = None
+    is_aggregate = False
+    is_window = False
+    is_leakproof = False
+    parallel = None
+    
+    if hasattr(node, "options") and node.options:
+        for option in node.options:
+            if hasattr(option, "defname"):
+                option_name = option.defname
+                option_value = getattr(option, "arg", None)
+                
+                if option_name == "language":
+                    language = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "volatility":
+                    volatility = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "security":
+                    security = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "parallel":
+                    parallel = str(option_value.sval) if hasattr(option_value, "sval") else str(option_value)
+                elif option_name == "leakproof":
+                    is_leakproof = True
+                elif option_name == "aggregate":
+                    is_aggregate = True
+                elif option_name == "window":
+                    is_window = True
+    
+    # Extract dependencies from function body
+    dependencies = []
+    
+    # Get function body
+    func_body = None
+    if hasattr(node, "options") and node.options:
+        for option in node.options:
+            if hasattr(option, "defname") and option.defname == "as":
+                if hasattr(option, "arg") and option.arg:
+                    if hasattr(option.arg, "sval"):
+                        func_body = option.arg.sval
+                    elif isinstance(option.arg, list):
+                        # Handle list of strings (multi-line function body)
+                        func_body = " ".join(str(arg.sval) for arg in option.arg if hasattr(arg, "sval"))
+    
+    # Extract table dependencies from function body using proper SQL parsing
+    if func_body:
+        dependencies = _extract_function_dependencies_with_parser(func_body)
+    
+    return FunctionASTObject(
         command=query_text,
         object_name=func_name,
-        query_type=BuildStage.FUNCTION,
-        dependencies=[],
+        dependencies=dependencies,
         query_hash=query_hash,
         query_start_pos=start,
         query_end_pos=end,
-        schema=None,  # Could extract from funcname if needed
-        ast_node=node
+        schema=schema,
+        ast_node=node,
+        parameters=parameters,
+        return_type=return_type,
+        language=language,
+        volatility=volatility,
+        security=security,
+        is_aggregate=is_aggregate,
+        is_window=is_window,
+        is_leakproof=is_leakproof,
+        parallel=parallel,
+        function_body=func_body
     )
+
+def _extract_function_dependencies_with_parser(func_body: str) -> List[str]:
+    """
+    Extract table dependencies from PL/pgSQL function body using proper SQL parsing.
+    Uses parse_sql with parse_plpgsql fallback to find table references.
+    """
+    dependencies = []
+    
+    try:
+        # Try to parse the function body as SQL first
+        stmts = parse_sql(func_body)
+        for stmt in stmts:
+            deps = _extract_dependencies_from_ast_node(stmt.stmt)
+            dependencies.extend(deps)
+    except Exception:
+        # If parse_sql fails, try parse_plpgsql
+        try:
+            stmts = parse_plpgsql(func_body)
+            for stmt in stmts:
+                # parse_plpgsql returns dicts, not objects with .stmt
+                deps = _extract_dependencies_from_plpgsql_stmt(stmt)
+                dependencies.extend(deps)
+        except Exception:
+            # If both parsers fail, return empty dependencies
+            pass
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_deps = []
+    for dep in dependencies:
+        if dep not in seen:
+            seen.add(dep)
+            unique_deps.append(dep)
+    
+    return unique_deps
+
+def _extract_dependencies_from_ast_node(node) -> List[str]:
+    """Extract table dependencies from a pglast AST node."""
+    dependencies = []
+    
+    if not node:
+        return dependencies
+    
+    node_type = type(node).__name__
+    
+    if node_type == "SelectStmt":
+        # Handle SELECT statements
+        if hasattr(node, "fromClause") and node.fromClause:
+            for from_item in node.fromClause:
+                if hasattr(from_item, "relname"):
+                    table_name = from_item.relname.lower()
+                    schema = getattr(from_item, "schemaname", None)
+                    if schema:
+                        qualified_name = f"{schema.lower()}.{table_name}"
+                    else:
+                        qualified_name = table_name
+                    
+                    if qualified_name.lower() not in POSTGRES_BUILTINS:
+                        dependencies.append(qualified_name)
+    
+    elif node_type == "UpdateStmt":
+        # Handle UPDATE statements
+        if hasattr(node, "relation") and node.relation:
+            table_name = node.relation.relname.lower()
+            schema = getattr(node.relation, "schemaname", None)
+            if schema:
+                qualified_name = f"{schema.lower()}.{table_name}"
+            else:
+                qualified_name = table_name
+            
+            if qualified_name.lower() not in POSTGRES_BUILTINS:
+                dependencies.append(qualified_name)
+    
+    elif node_type == "DeleteStmt":
+        # Handle DELETE statements
+        if hasattr(node, "relation") and node.relation:
+            table_name = node.relation.relname.lower()
+            schema = getattr(node.relation, "schemaname", None)
+            if schema:
+                qualified_name = f"{schema.lower()}.{table_name}"
+            else:
+                qualified_name = table_name
+            
+            if qualified_name.lower() not in POSTGRES_BUILTINS:
+                dependencies.append(qualified_name)
+    
+    # Recursively check child nodes
+    for attr_name in dir(node):
+        if not attr_name.startswith('_'):
+            attr_value = getattr(node, attr_name)
+            if isinstance(attr_value, list):
+                for item in attr_value:
+                    if hasattr(item, '__class__'):
+                        deps = _extract_dependencies_from_ast_node(item)
+                        dependencies.extend(deps)
+            elif hasattr(attr_value, '__class__'):
+                deps = _extract_dependencies_from_ast_node(attr_value)
+                dependencies.extend(deps)
+    
+    return dependencies
+
+def _extract_full_type_name(type_node) -> str:
+    """Extract full type name including precision, scale, and other modifiers."""
+    if not type_node:
+        return "unknown"
+    
+    # Get the base type name
+    if hasattr(type_node, "names") and type_node.names:
+        base_type = str(type_node.names[-1].sval)
+    else:
+        base_type = str(type_node)
+    
+    # Handle type modifiers (precision, scale, etc.)
+    modifiers = []
+    
+    if hasattr(type_node, "typmods") and type_node.typmods:
+        for typmod in type_node.typmods:
+            # typmod is A_Const with val containing Integer
+            if hasattr(typmod, "val") and hasattr(typmod.val, "ival"):
+                modifiers.append(str(typmod.val.ival))
+            elif hasattr(typmod, "ival"):
+                modifiers.append(str(typmod.ival))
+            elif hasattr(typmod, "sval"):
+                modifiers.append(str(typmod.sval))
+            else:
+                modifiers.append(str(typmod))
+    
+    # Build the full type name
+    if modifiers:
+        return f"{base_type}({', '.join(modifiers)})"
+    else:
+        return base_type
+
+def _extract_dependencies_from_plpgsql_stmt(stmt_dict: dict) -> List[str]:
+    """Extract table dependencies from a parse_plpgsql statement dict."""
+    dependencies = []
+    
+    # This is a simplified implementation for parse_plpgsql output
+    # The actual structure depends on what parse_plpgsql returns
+    # For now, we'll do a basic text search as fallback
+    import re
+    
+    stmt_text = str(stmt_dict)
+    
+    # Look for table references in the statement
+    from_pattern = r'\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*\.?[a-zA-Z_][a-zA-Z0-9_]*)\b'
+    matches = re.findall(from_pattern, stmt_text, re.IGNORECASE)
+    
+    for match in matches:
+        table_name = match.strip()
+        if table_name and table_name.lower() not in POSTGRES_BUILTINS:
+            dependencies.append(table_name.lower())
+    
+    return dependencies
+
+def _get_constraint_type(constraint) -> str:
+    """Extract constraint type from constraint node."""
+    if hasattr(constraint, "contype"):
+        contype = constraint.contype
+        if contype == 1:
+            return "NOT NULL"
+        elif contype == 2:
+            return "FOREIGN KEY"
+        elif contype == 3:
+            return "PRIMARY KEY"
+        elif contype == 4:
+            return "UNIQUE"
+        elif contype == 5:
+            return "CHECK"
+        elif contype == 6:
+            return "EXCLUSION"
+    return "UNKNOWN"
+
+def _extract_constraint_columns(constraint) -> List[str]:
+    """Extract column names from constraint node."""
+    columns = []
+    if hasattr(constraint, "keys") and constraint.keys:
+        # This is for constraints that reference columns by index
+        # We'd need to map these back to column names from the table definition
+        # For now, return empty list - this would need more complex logic
+        pass
+    elif hasattr(constraint, "exclusions") and constraint.exclusions:
+        # For exclusion constraints
+        for exclusion in constraint.exclusions:
+            if hasattr(exclusion, "name"):
+                columns.append(str(exclusion.name))
+    return columns
 
 # Legacy compatibility functions
 def extract_build_queries(sql: str, use_ast_objects: bool = True, grants: bool = True) -> Union[ASTList, List[dict]]:
@@ -396,7 +746,11 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
             else:
                 # Load all .sql files in the directory
                 all_sql = []
-                for root, dirs, files in os.walk(working_dir):
+                search_dir = working_dir
+                if target_path:
+                    search_dir = os.path.join(working_dir, target_path)
+                
+                for root, dirs, files in os.walk(search_dir):
                     for file in files:
                         if file.endswith('.sql'):
                             file_path = os.path.join(root, file)

@@ -4,8 +4,9 @@ Generates migration commands by comparing two ASTLists.
 """
 
 from typing import List, Optional
-from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
-from pg_compose_core.lib.ast_list import ASTList
+from pg_compose_core.lib.ast.objects import ASTObject, BuildStage
+from pg_compose_core.lib.ast.function import FunctionASTObject
+from pg_compose_core.lib.ast.list import ASTList
 
 def diff_schemas(base: ASTList, updated: ASTList) -> ASTList:
     """
@@ -58,7 +59,12 @@ def _generate_drop_command(obj: ASTObject) -> ASTObject:
     elif obj.query_type == BuildStage.MATERIALIZED_VIEW:
         command = f"DROP MATERIALIZED VIEW {object_name};"
     elif obj.query_type == BuildStage.FUNCTION:
-        command = f"DROP FUNCTION {object_name};"
+        if isinstance(obj, FunctionASTObject) and obj.parameters:
+            # Include parameter types in DROP for function overloading
+            param_strs = [f"{param.data_type}" for param in obj.parameters]
+            command = f"DROP FUNCTION {object_name}({', '.join(param_strs)});"
+        else:
+            command = f"DROP FUNCTION {object_name};"
     elif obj.query_type == BuildStage.INDEX:
         command = f"DROP INDEX {object_name};"
     elif obj.query_type == BuildStage.CONSTRAINT:
@@ -104,11 +110,23 @@ def _generate_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> List[AST
         commands.append(new_obj)
         
     elif old_obj.query_type == BuildStage.FUNCTION:
-        # For functions, drop and recreate
-        drop_cmd = _generate_drop_command(old_obj)
-        if drop_cmd:
-            commands.append(drop_cmd)
-        commands.append(new_obj)
+        # For functions, check if signature changed
+        if isinstance(old_obj, FunctionASTObject) and isinstance(new_obj, FunctionASTObject):
+            if old_obj.signature_matches(new_obj):
+                # Same signature, body-only change - use CREATE OR REPLACE
+                commands.append(new_obj)
+            else:
+                # Signature changed - need DROP + CREATE
+                drop_cmd = _generate_drop_command(old_obj)
+                if drop_cmd:
+                    commands.append(drop_cmd)
+                commands.append(new_obj)
+        else:
+            # Fallback for non-FunctionASTObject functions
+            drop_cmd = _generate_drop_command(old_obj)
+            if drop_cmd:
+                commands.append(drop_cmd)
+            commands.append(new_obj)
         
     elif old_obj.query_type == BuildStage.GRANT:
         # For grants, revoke old and grant new
@@ -133,20 +151,102 @@ def _generate_table_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> Li
     # Use qualified name
     table_name = new_obj.qualified_name
     
-    # For now, generate a simple ALTER command for any table change
-    # This is a simplified approach - in practice you'd parse the AST to compare columns
-    if old_obj.query_hash != new_obj.query_hash:
-        # Generate a placeholder ALTER command
-        # In a real implementation, you'd compare the actual column definitions
-        alter_command = f"ALTER TABLE {table_name} ADD COLUMN new_column TEXT; -- TODO: Implement proper column comparison"
+    # Check if both objects are TableASTObject instances
+    from pg_compose_core.lib.ast.table import TableASTObject
+    
+    if isinstance(old_obj, TableASTObject) and isinstance(new_obj, TableASTObject):
+        # Get the differences
+        added_columns, removed_columns, changed_columns = new_obj.diff(old_obj)
         
-        commands.append(ASTObject(
-            command=alter_command,
-            object_name=new_obj.object_name,
-            query_type=BuildStage.UNKNOWN,
-            dependencies=new_obj.dependencies,
-            schema=new_obj.schema
-        ))
+        # Generate ALTER statements for added columns
+        for column in added_columns:
+            alter_command = f"ALTER TABLE {table_name} ADD COLUMN {column.name} {column.data_type}"
+            if not column.is_nullable:
+                alter_command += " NOT NULL"
+            if column.default:
+                alter_command += f" DEFAULT {column.default}"
+            alter_command += ";"
+            
+            commands.append(ASTObject(
+                command=alter_command,
+                object_name=new_obj.object_name,
+                query_type=BuildStage.UNKNOWN,
+                dependencies=new_obj.dependencies,
+                schema=new_obj.schema
+            ))
+        
+        # Generate ALTER statements for removed columns
+        for column in removed_columns:
+            alter_command = f"ALTER TABLE {table_name} DROP COLUMN {column.name};"
+            
+            commands.append(ASTObject(
+                command=alter_command,
+                object_name=new_obj.object_name,
+                query_type=BuildStage.UNKNOWN,
+                dependencies=new_obj.dependencies,
+                schema=new_obj.schema
+            ))
+        
+        # Generate ALTER statements for changed columns
+        for old_col, new_col in changed_columns:
+            # Type changes
+            if old_col.data_type != new_col.data_type:
+                alter_command = f"ALTER TABLE {table_name} ALTER COLUMN {new_col.name} TYPE {new_col.data_type};"
+                
+                commands.append(ASTObject(
+                    command=alter_command,
+                    object_name=new_obj.object_name,
+                    query_type=BuildStage.UNKNOWN,
+                    dependencies=new_obj.dependencies,
+                    schema=new_obj.schema
+                ))
+            
+            # Nullability changes
+            if old_col.is_nullable != new_col.is_nullable:
+                if new_col.is_nullable:
+                    alter_command = f"ALTER TABLE {table_name} ALTER COLUMN {new_col.name} DROP NOT NULL;"
+                else:
+                    alter_command = f"ALTER TABLE {table_name} ALTER COLUMN {new_col.name} SET NOT NULL;"
+                
+                commands.append(ASTObject(
+                    command=alter_command,
+                    object_name=new_obj.object_name,
+                    query_type=BuildStage.UNKNOWN,
+                    dependencies=new_obj.dependencies,
+                    schema=new_obj.schema
+                ))
+            
+            # Default changes
+            if old_col.default != new_col.default:
+                if new_col.default is None:
+                    alter_command = f"ALTER TABLE {table_name} ALTER COLUMN {new_col.name} DROP DEFAULT;"
+                else:
+                    alter_command = f"ALTER TABLE {table_name} ALTER COLUMN {new_col.name} SET DEFAULT {new_col.default};"
+                
+                commands.append(ASTObject(
+                    command=alter_command,
+                    object_name=new_obj.object_name,
+                    query_type=BuildStage.UNKNOWN,
+                    dependencies=new_obj.dependencies,
+                    schema=new_obj.schema
+                ))
+        
+        # TODO: Add constraint comparison logic here
+        # This would compare old_obj.constraints vs new_obj.constraints
+        # and generate ADD/DROP CONSTRAINT statements
+        
+    else:
+        # Fallback for non-TableASTObject instances
+        if old_obj.query_hash != new_obj.query_hash:
+            alter_command = f"ALTER TABLE {table_name} ADD COLUMN new_column TEXT; -- TODO: Implement proper column comparison"
+            
+            commands.append(ASTObject(
+                command=alter_command,
+                object_name=new_obj.object_name,
+                query_type=BuildStage.UNKNOWN,
+                dependencies=new_obj.dependencies,
+                schema=new_obj.schema
+            ))
     
     return commands
 

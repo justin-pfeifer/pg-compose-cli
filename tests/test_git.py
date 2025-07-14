@@ -2,7 +2,7 @@ import pytest
 import os
 from pg_compose_core.lib.git import extract_from_git_repo
 from pg_compose_core.lib.parser import load_source
-from pg_compose_core.lib.ast_list import ASTList
+from pg_compose_core.lib.ast import ASTList
 
 
 def test_git_repo_clone():

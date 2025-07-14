@@ -2,8 +2,8 @@
 Core library functionality for PostgreSQL schema comparison and migration.
 """
 
-from pg_compose_core.lib.ast_objects import ASTObject, BuildStage
-from pg_compose_core.lib.ast_list import ASTList
+from pg_compose_core.lib.ast import ASTObject, BuildStage
+from pg_compose_core.lib.ast import ASTList
 from pg_compose_core.lib.diff import diff_schemas
 from pg_compose_core.lib.deploy import diff_sort, deploy
 from pg_compose_core.lib.sorter import sort_queries, sort_alter_commands

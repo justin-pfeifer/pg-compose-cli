@@ -3,7 +3,7 @@ import argparse
 import logging
 from pg_compose_core.lib.parser import load_source
 from pg_compose_core.lib.diff import diff_schemas
-from pg_compose_core.lib.ast_list import ASTList
+from pg_compose_core.lib.ast import ASTList
 
 
 def write_to_file(commands, filename, output_format):

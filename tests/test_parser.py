@@ -4,7 +4,7 @@ Tests for the simplified parser module.
 
 import pytest
 from pg_compose_core.lib.parser import parse_sql_to_ast_objects, extract_build_queries
-from pg_compose_core.lib.ast_objects import BuildStage
+from pg_compose_core.lib.ast import BuildStage
 
 
 def test_parse_simple_table():

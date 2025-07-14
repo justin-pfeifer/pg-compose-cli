@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse
 from typing import Optional, List, Dict, Any
 from pg_compose_core.lib.extract import extract_build_queries
 from pg_compose_core.lib.sorter import sort_queries
-from pg_compose_core.lib.ast_objects import ASTList
+from pg_compose_core.lib.ast import ASTList
 
 router = APIRouter()
 

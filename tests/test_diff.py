@@ -5,7 +5,7 @@ Tests for the simplified diff module.
 import pytest
 from pg_compose_core.lib.diff import diff_schemas
 from pg_compose_core.lib.parser import parse_sql_to_ast_objects
-from pg_compose_core.lib.ast_objects import BuildStage
+from pg_compose_core.lib.ast import BuildStage
 
 
 def test_diff_new_table():

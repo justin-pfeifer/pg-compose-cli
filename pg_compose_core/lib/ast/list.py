@@ -2,29 +2,29 @@
 ASTList container for ASTObject instances.
 """
 
-from typing import List, Optional
-from .ast_objects import ASTObject
+from typing import List, Iterator, Optional, Callable, Any
+from pg_compose_core.lib.ast.objects import ASTObject
 
 
-class ASTList:
+class ASTList(list):
     """
     Container for a list of ASTObject instances, with utilities for merging, sorting, diffing, and exporting to SQL.
     """
-    def __init__(self, objects: Optional[List[ASTObject]] = None):
-        self.objects: List[ASTObject] = objects or []
+    def __init__(self, items: Optional[List[ASTObject]] = None):
+        super().__init__(items or [])
 
-    def __iter__(self):
-        return iter(self.objects)
+    def __iter__(self) -> Iterator[ASTObject]:
+        return super().__iter__()
 
     def __len__(self):
-        return len(self.objects)
+        return super().__len__()
 
-    def __getitem__(self, idx):
-        return self.objects[idx]
+    def __getitem__(self, item) -> Any:
+        return super().__getitem__(item)
 
     def merge(self, other: 'ASTList') -> 'ASTList':
         # Combine and deduplicate by (object_name, query_type, query_hash)
-        combined = self.objects + other.objects
+        combined = self + other
         seen = set()
         deduped = []
         for obj in combined:
@@ -36,23 +36,26 @@ class ASTList:
 
     def sort(self) -> 'ASTList':
         # Import here to avoid circular dependency
-        from .sorter import sort_queries
-        sorted_objs = sort_queries(self.objects, use_object_names=False, grant_handling=True)
+        from pg_compose_core.lib.sorter import sort_queries
+        sorted_objs = sort_queries(self, use_object_names=False, grant_handling=True)
         return ASTList(sorted_objs)
 
     def to_sql(self) -> str:
         # Output SQL for all objects in order
-        return "\n\n".join(obj.command for obj in self.objects)
+        return "\n\n".join(obj.command for obj in self)
 
     def to_dict_list(self) -> List[dict]:
-        return [obj.to_dict() for obj in self.objects]
+        return [obj.to_dict() for obj in self]
 
     @classmethod
     def from_dict_list(cls, dicts: List[dict]) -> 'ASTList':
         return cls([ASTObject.from_dict(d) for d in dicts])
 
     def __str__(self):
-        return f"ASTList({len(self.objects)} objects)"
+        return f"ASTList({len(self)} objects)"
 
     def __repr__(self):
-        return f"ASTList(objects={self.objects!r})" 
+        return f"ASTList(objects={list.__repr__(self)})"
+
+    def filter(self, predicate: Callable[[ASTObject], bool]) -> 'ASTList':
+        return ASTList([obj for obj in self if predicate(obj)]) 

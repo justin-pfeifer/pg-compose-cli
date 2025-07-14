@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional, Union
 from collections import defaultdict, deque
-from pg_compose_core.lib.ast_objects import ASTObject
+from pg_compose_core.lib.ast.objects import ASTObject
 
 def sort_queries(objects: List[ASTObject], use_object_names: bool = True, grant_handling: bool = True) -> List[ASTObject]:
     """
