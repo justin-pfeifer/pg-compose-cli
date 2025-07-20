@@ -174,9 +174,15 @@ def _parse_create_statement(node, query_text: str, query_hash: str, start: int, 
                     is_nullable = not getattr(elt, "is_not_null", False)
                     default = None
                     
-                    # Check for default value
-                    if hasattr(elt, "raw_default") and elt.raw_default:
-                        default = str(elt.raw_default)
+                    # Check for default value in constraints
+                    if hasattr(elt, "constraints") and elt.constraints:
+                        for constraint in elt.constraints:
+                            if hasattr(constraint, "contype"):
+                                from pglast.enums import ConstrType
+                                if constraint.contype == ConstrType.CONSTR_DEFAULT:
+                                    if hasattr(constraint, "raw_expr"):
+                                        default = _extract_default_value(constraint.raw_expr)
+                                    break
                     
                     columns.append(TableColumn(
                         name=col_name,
@@ -959,4 +965,82 @@ def load_source(source: str, schemas: Optional[List[str]] = None, grants: bool =
         return parse_sql_to_ast_objects(combined_sql, grants=grants)
     
     else:
-        raise NotImplementedError(f"Source type not supported: {source}") 
+        raise NotImplementedError(f"Source type not supported: {source}")
+
+def _extract_default_value(expr) -> str:
+    """Extract default value from an AST expression."""
+    if hasattr(expr, "val"):
+        val = expr.val
+        if hasattr(val, "sval"):
+            # String value
+            return f"'{val.sval}'"
+        elif hasattr(val, "ival"):
+            # Integer value
+            return str(val.ival)
+        elif hasattr(val, "fval"):
+            # Float value
+            return str(val.fval)
+        elif hasattr(val, "boolval"):
+            # Boolean value
+            return str(val.boolval).lower()
+    elif hasattr(expr, "funcname"):
+        # Function call (e.g., NOW(), CURRENT_TIMESTAMP)
+        func_name = ".".join(str(name.sval) for name in expr.funcname)
+        return func_name + "()"
+    elif hasattr(expr, "op"):
+        # SQLValueFunction (e.g., CURRENT_TIMESTAMP, CURRENT_DATE, etc.)
+        from pglast.enums import SQLValueFunctionOp
+        op = expr.op
+        
+        # Map SQLValueFunctionOp to SQL function names
+        op_mapping = {
+            SQLValueFunctionOp.SVFOP_CURRENT_TIMESTAMP: "CURRENT_TIMESTAMP",
+            SQLValueFunctionOp.SVFOP_CURRENT_DATE: "CURRENT_DATE",
+            SQLValueFunctionOp.SVFOP_CURRENT_TIME: "CURRENT_TIME",
+            SQLValueFunctionOp.SVFOP_LOCALTIME: "LOCALTIME",
+            SQLValueFunctionOp.SVFOP_LOCALTIMESTAMP: "LOCALTIMESTAMP",
+            SQLValueFunctionOp.SVFOP_CURRENT_ROLE: "CURRENT_ROLE",
+            SQLValueFunctionOp.SVFOP_CURRENT_USER: "CURRENT_USER",
+            SQLValueFunctionOp.SVFOP_USER: "USER",
+            SQLValueFunctionOp.SVFOP_SESSION_USER: "SESSION_USER",
+            SQLValueFunctionOp.SVFOP_CURRENT_CATALOG: "CURRENT_CATALOG",
+            SQLValueFunctionOp.SVFOP_CURRENT_SCHEMA: "CURRENT_SCHEMA",
+        }
+        
+        if op in op_mapping:
+            return op_mapping[op]
+        else:
+            # Fallback for unknown SQLValueFunctionOp
+            return f"SQLValueFunction({op.name})"
+    elif hasattr(expr, "sval"):
+        # Direct string value
+        return f"'{expr.sval}'"
+    elif hasattr(expr, "ival"):
+        # Direct integer value
+        return str(expr.ival)
+    elif hasattr(expr, "fval"):
+        # Direct float value
+        return str(expr.fval)
+    elif hasattr(expr, "boolval"):
+        # Direct boolean value
+        return str(expr.boolval).lower()
+    elif hasattr(expr, "arg") and hasattr(expr, "typeName"):
+        # TypeCast expression (e.g., ('val1', 'val2')::type)
+        arg_str = _extract_default_value(expr.arg)
+        type_name = _extract_full_type_name(expr.typeName)
+        return f"({arg_str})::{type_name}"
+    elif hasattr(expr, "elements"):
+        # Array expression (e.g., ARRAY['val1', 'val2'])
+        elements = []
+        for element in expr.elements:
+            elements.append(_extract_default_value(element))
+        return f"ARRAY[{', '.join(elements)}]"
+    elif hasattr(expr, "args"):
+        # Row expression (e.g., ROW('val1', 'val2'))
+        args = []
+        for arg in expr.args:
+            args.append(_extract_default_value(arg))
+        return f"ROW({', '.join(args)})"
+    
+    # Fallback: convert to string
+    return str(expr) 
