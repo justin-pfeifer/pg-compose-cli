@@ -83,8 +83,32 @@ def _generate_drop_command(obj: ASTObject) -> ASTObject:
         # For grants, generate a REVOKE command by parsing the SQL
         from pg_compose_core.lib.parser import parse_sql_to_ast_objects
         
-        # Generate revoke command
-        revoke_sql = f"REVOKE ALL ON {obj.object_name.replace('grant_on_', '')} FROM PUBLIC;"
+        # Extract original object name from grant object name
+        # Format: grant_PRIVILEGES_on_OBJECT_to_GRANTEE
+        grant_parts = obj.object_name.split('_')
+        if len(grant_parts) >= 5 and grant_parts[0] == 'grant':
+            # Find the 'on' and 'to' parts to extract object name
+            try:
+                on_index = grant_parts.index('on')
+                to_index = grant_parts.index('to')
+                if on_index < to_index:
+                    object_name = '_'.join(grant_parts[on_index + 1:to_index])
+                    privileges = grant_parts[1:on_index]
+                    grantees = grant_parts[to_index + 1:]
+                    
+                    # Generate revoke command
+                    privilege_str = ' '.join(privileges) if privileges else 'ALL'
+                    grantee_str = ' '.join(grantees) if grantees else 'PUBLIC'
+                    revoke_sql = f"REVOKE {privilege_str} ON {object_name} FROM {grantee_str};"
+                    revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
+                    if revoke_objects:
+                        return revoke_objects[0]
+            except ValueError:
+                # Fallback if parsing fails
+                pass
+        
+        # Fallback: generate a generic revoke command
+        revoke_sql = f"REVOKE ALL ON {obj.object_name.replace('grant_', '').split('_on_')[1].split('_to_')[0]} FROM PUBLIC;"
         revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
         if revoke_objects:
             return revoke_objects[0]
@@ -159,11 +183,31 @@ def _generate_alter_commands(old_obj: ASTObject, new_obj: ASTObject) -> List[AST
         # Parse the GRANT statements to get proper AST objects with unique query hashes
         from pg_compose_core.lib.parser import parse_sql_to_ast_objects
         
-        # Generate revoke command
-        revoke_sql = f"REVOKE ALL ON {old_obj.object_name.replace('grant_on_', '')} FROM PUBLIC;"
-        revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
-        if revoke_objects:
-            commands.extend(revoke_objects)
+        # Extract original object name, privileges, and grantees from old grant object name
+        # Format: grant_PRIVILEGES_on_OBJECT_to_GRANTEE
+        old_grant_parts = old_obj.object_name.split('_')
+        if len(old_grant_parts) >= 5 and old_grant_parts[0] == 'grant':
+            try:
+                on_index = old_grant_parts.index('on')
+                to_index = old_grant_parts.index('to')
+                if on_index < to_index:
+                    object_name = '_'.join(old_grant_parts[on_index + 1:to_index])
+                    privileges = old_grant_parts[1:on_index]
+                    grantees = old_grant_parts[to_index + 1:]
+                    
+                    # Generate revoke command
+                    privilege_str = ' '.join(privileges) if privileges else 'ALL'
+                    grantee_str = ' '.join(grantees) if grantees else 'PUBLIC'
+                    revoke_sql = f"REVOKE {privilege_str} ON {object_name} FROM {grantee_str};"
+                    revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
+                    if revoke_objects:
+                        commands.extend(revoke_objects)
+            except ValueError:
+                # Fallback if parsing fails
+                revoke_sql = f"REVOKE ALL ON {old_obj.object_name.replace('grant_', '').split('_on_')[1].split('_to_')[0]} FROM PUBLIC;"
+                revoke_objects = parse_sql_to_ast_objects(revoke_sql, grants=True)
+                if revoke_objects:
+                    commands.extend(revoke_objects)
         
         # Add the new grant object (which should already be properly parsed)
         commands.append(new_obj)

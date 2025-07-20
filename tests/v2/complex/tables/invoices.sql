@@ -8,4 +8,9 @@ CREATE TABLE complex.invoices (
     due_date DATE,
     status VARCHAR(20) DEFAULT 'unpaid',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-); 
+);
+
+-- Grant permissions on invoices table
+GRANT SELECT ON complex.invoices TO app_user;
+GRANT SELECT, INSERT, UPDATE ON complex.invoices TO billing_user;
+GRANT SELECT ON complex.invoices TO readonly_user; 

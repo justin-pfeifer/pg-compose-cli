@@ -7,4 +7,9 @@ CREATE TABLE complex.sales (
     sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(20) DEFAULT 'pending',
     payment_method VARCHAR(50)
-); 
+);
+
+-- Grant permissions on sales table
+GRANT SELECT ON complex.sales TO app_user;
+GRANT SELECT, INSERT, UPDATE ON complex.sales TO sales_user;
+GRANT SELECT ON complex.sales TO readonly_user; 

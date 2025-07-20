@@ -320,7 +320,27 @@ def _parse_grant_statement(node, query_text: str, query_hash: str, start: int, e
     ast_objects = []
     objs = getattr(node, "objects", []) or []
     
-    for obj in objs:
+    # Extract privileges and grantees from the grant statement
+    privileges = []
+    if hasattr(node, "privileges") and node.privileges:
+        for priv in node.privileges:
+            if hasattr(priv, "priv_name"):
+                # Preserve original case by converting to uppercase
+                privileges.append(str(priv.priv_name).upper())
+    
+    grantees = []
+    if hasattr(node, "grantees") and node.grantees:
+        for grantee in node.grantees:
+            if hasattr(grantee, "rolename"):
+                grantees.append(str(grantee.rolename))
+            elif hasattr(grantee, "sval"):
+                grantees.append(str(grantee.sval))
+    
+    # Create a unique identifier for this grant statement
+    privilege_str = "_".join(privileges) if privileges else "ALL"
+    grantee_str = "_".join(grantees) if grantees else "PUBLIC"
+    
+    for i, obj in enumerate(objs):
         dependencies = []
         object_name = None
         schema = None
@@ -363,18 +383,27 @@ def _parse_grant_statement(node, query_text: str, query_hash: str, start: int, e
             if d not in POSTGRES_BUILTINS and not d.startswith("pg_")
         ]
         
-        ast_objects.append(ASTObject(
-            command=query_text,
-            object_name=object_name,
-            query_type=BuildStage.GRANT,
-            resource_type=resource_type,
-            dependencies=filtered_deps,
-            query_hash=query_hash,
-            query_start_pos=start,
-            query_end_pos=end,
-            schema=schema,
-            ast_node=node
-        ))
+        # Create separate grant objects for each privilege
+        for privilege in privileges:
+            # Create a unique object name that includes privileges and grantees
+            unique_object_name = f"grant_{privilege}_on_{object_name}_to_{grantee_str}"
+            
+            # Create a unique query hash for this specific grant
+            unique_grant_text = f"GRANT {privilege} ON {object_name} TO {grantee_str};"
+            unique_query_hash = hashlib.sha256(normalize_sql(unique_grant_text).encode()).hexdigest()
+            
+            ast_objects.append(ASTObject(
+                command=query_text,
+                object_name=unique_object_name,
+                query_type=BuildStage.GRANT,
+                resource_type=resource_type,
+                dependencies=filtered_deps,
+                query_hash=unique_query_hash,
+                query_start_pos=start,
+                query_end_pos=end,
+                schema=schema,
+                ast_node=node
+            ))
     
     return ast_objects
 

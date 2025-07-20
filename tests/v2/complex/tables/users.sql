@@ -8,4 +8,9 @@ CREATE TABLE complex.users (
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-); 
+);
+
+-- Grant permissions on users table
+GRANT SELECT ON complex.users TO app_user;
+GRANT SELECT, INSERT, UPDATE, DELETE ON complex.users TO admin_user;
+GRANT SELECT ON complex.users TO readonly_user; 
